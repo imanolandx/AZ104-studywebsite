@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AZ-104 Study Hub</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h1>AZ-104</h1>
+            <p>Azure Administrator</p>
+        </div>
+        <ul class="nav-menu">
+            <li><a href="#" data-page="dashboard" class="active"><span class="icon">📊</span> Dashboard</a></li>
+            <li><a href="#" data-page="practice"><span class="icon">📝</span> Practice Questions</a></li>
+            <li><a href="#" data-page="flashcards"><span class="icon">🃏</span> Flash Cards</a></li>
+            <li><a href="#" data-page="topics"><span class="icon">📈</span> Topic Analysis</a></li>
+            <li><a href="#" data-page="notes"><span class="icon">📚</span> Study Notes</a></li>
+        </ul>
+        <div class="sidebar-footer">
+            <p>606 Questions | 5 Topics</p>
+            <p style="font-size:10px;margin-top:4px;opacity:0.7">396 MCQ + 210 Image-based</p>
+        </div>
+    </nav>
+
+    <main class="content" id="content">
+        <!-- Dashboard Page -->
+        <div class="page active" id="page-dashboard">
+            <div class="page-header">
+                <h2>Study Dashboard</h2>
+                <p>Track your AZ-104 exam preparation progress</p>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number" id="stat-total">606</div>
+                    <div class="stat-label">Total Questions</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="stat-attempted">0</div>
+                    <div class="stat-label">Attempted</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="stat-correct">0</div>
+                    <div class="stat-label">Correct</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="stat-accuracy">0%</div>
+                    <div class="stat-label">Accuracy</div>
+                </div>
+            </div>
+            <div class="dashboard-grid">
+                <div class="card">
+                    <h3>Topic Progress</h3>
+                    <div id="topic-progress-chart"></div>
+                </div>
+                <div class="card">
+                    <h3>Recent Activity</h3>
+                    <div id="recent-activity"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Practice Questions Page -->
+        <div class="page" id="page-practice">
+            <div class="page-header">
+                <h2>Practice Questions</h2>
+                <div class="practice-controls">
+                    <select id="topic-filter">
+                        <option value="all">All Topics</option>
+                    </select>
+                    <select id="status-filter">
+                        <option value="all">All Questions</option>
+                        <option value="unanswered">Unanswered</option>
+                        <option value="correct">Correct</option>
+                        <option value="incorrect">Incorrect</option>
+                    </select>
+                    <button class="btn btn-primary" id="btn-random">Random Question</button>
+                </div>
+            </div>
+            <div class="question-container" id="question-container">
+                <div class="question-nav">
+                    <button class="btn btn-secondary" id="btn-prev">← Previous</button>
+                    <span class="question-counter" id="question-counter">1 / 396</span>
+                    <button class="btn btn-secondary" id="btn-next">Next →</button>
+                </div>
+                <div class="question-card" id="question-card">
+                    <div class="question-topic-badge" id="question-topic-badge"></div>
+                    <div class="question-text" id="question-text"></div>
+                    <div class="options-list" id="options-list"></div>
+                    <div class="answer-section hidden" id="answer-section">
+                        <div class="answer-reveal" id="answer-reveal"></div>
+                    </div>
+                    <div class="question-actions">
+                        <button class="btn btn-primary" id="btn-check">Check Answer</button>
+                        <button class="btn btn-secondary hidden" id="btn-reveal">Reveal Answer</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Flashcards Page -->
+        <div class="page" id="page-flashcards">
+            <div class="page-header">
+                <h2>Flash Cards</h2>
+                <div class="practice-controls">
+                    <select id="flashcard-topic-filter">
+                        <option value="all">All Topics</option>
+                    </select>
+                    <button class="btn btn-primary" id="btn-shuffle">Shuffle</button>
+                </div>
+            </div>
+            <div class="flashcard-container">
+                <div class="flashcard" id="flashcard" onclick="app.flipCard()">
+                    <div class="flashcard-inner" id="flashcard-inner">
+                        <div class="flashcard-front" id="flashcard-front">
+                            <p>Click to flip</p>
+                        </div>
+                        <div class="flashcard-back" id="flashcard-back">
+                            <p>Answer here</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="flashcard-nav">
+                    <button class="btn btn-secondary" id="btn-fc-prev">← Previous</button>
+                    <span class="question-counter" id="flashcard-counter">1 / 396</span>
+                    <button class="btn btn-secondary" id="btn-fc-next">Next →</button>
+                </div>
+                <div class="flashcard-actions">
+                    <button class="btn btn-danger" id="btn-fc-hard">Hard 😰</button>
+                    <button class="btn btn-warning" id="btn-fc-medium">Medium 🤔</button>
+                    <button class="btn btn-success" id="btn-fc-easy">Easy 😊</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Topic Analysis Page -->
+        <div class="page" id="page-topics">
+            <div class="page-header">
+                <h2>Topic Focus Analysis</h2>
+                <p>Identify which topics need more study based on question distribution</p>
+            </div>
+            <div class="topic-analysis" id="topic-analysis"></div>
+        </div>
+
+        <!-- Notes Page -->
+        <div class="page" id="page-notes">
+            <div class="page-header">
+                <h2>Study Notes</h2>
+                <p>Key concepts from Microsoft Learn for each AZ-104 topic</p>
+            </div>
+            <div class="notes-container" id="notes-container">
+                <div class="notes-sidebar">
+                    <ul class="notes-nav" id="notes-nav"></ul>
+                </div>
+                <div class="notes-content" id="notes-content"></div>
+            </div>
+        </div>
+    </main>
+
+    <button class="mobile-menu-btn" id="mobile-menu-btn">☰</button>
+
+    <script src="questions.js"></script>
+    <script src="topics.js"></script>
+    <script src="notes.js"></script>
+    <script src="flashcards.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
