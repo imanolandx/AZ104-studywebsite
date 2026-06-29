@@ -135,6 +135,10 @@ const app = {
         document.getElementById('btn-reveal').addEventListener('click', () => this.revealAnswer());
         document.getElementById('topic-filter').addEventListener('change', () => this.filterQuestions());
         document.getElementById('status-filter').addEventListener('change', () => this.filterQuestions());
+        document.getElementById('btn-goto').addEventListener('click', () => this.gotoQuestion());
+        document.getElementById('question-search').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') this.gotoQuestion();
+        });
         this.renderQuestion();
     },
 
@@ -177,7 +181,7 @@ const app = {
         const topicInfo = TOPICS[q.topic];
 
         document.getElementById('question-counter').textContent = 
-            `${this.currentQuestionIndex + 1} / ${this.filteredQuestions.length}`;
+            `Q${q.id} — ${this.currentQuestionIndex + 1} / ${this.filteredQuestions.length}`;
         document.getElementById('question-topic-badge').textContent = topicInfo ? topicInfo.name : 'General';
         document.getElementById('question-topic-badge').style.background = topicInfo ? topicInfo.color + '20' : '#e3f2fd';
         document.getElementById('question-topic-badge').style.color = topicInfo ? topicInfo.color : '#0078d4';
@@ -278,104 +282,310 @@ const app = {
     },
 
     getExplanation(q) {
+        const correctSet = new Set(q.correctAnswers.map(a => a.trim()));
+        const options = q.options || [];
+        
+        // Build per-option breakdown
+        let html = '<div class="explanation-header">Option Breakdown:</div>';
+        
+        if (options.length > 0) {
+            options.forEach(opt => {
+                const isCorrect = correctSet.has(opt.trim());
+                const reason = this.explainOption(q, opt, isCorrect);
+                const cls = isCorrect ? 'option-correct' : 'option-wrong';
+                const icon = isCorrect ? '✅' : '❌';
+                html += `<div class="option-explanation ${cls}">
+                    <strong>${icon} ${opt}</strong>
+                    ${reason}
+                </div>`;
+            });
+        } else {
+            // Image-based / no options
+            html += `<div class="option-explanation option-correct">
+                <strong>✅ ${q.correctAnswers.join(', ')}</strong>
+                ${this.explainCorrectAnswer(q)}
+            </div>`;
+        }
+        
+        return html;
+    },
+
+    explainOption(q, option, isCorrect) {
+        const question = q.question.toLowerCase();
+        const opt = option.toLowerCase();
+        const answer = q.correctAnswers.join(' ').toLowerCase();
+
+        // Extract the option letter and text
+        const optText = option.replace(/^[A-Z]\.\s*/, '').trim();
+        const optLower = optText.toLowerCase();
+
+        // === IDENTITY & ACCESS MANAGEMENT ===
+        if (question.includes('tag')) {
+            if (isCorrect) return "Tags are name-value pairs that let you categorize and organize Azure resources by department, environment, cost center, etc. They can be applied to resources, resource groups, and subscriptions without requiring resource moves.";
+            if (optLower.includes('management group')) return "Management Groups organize subscriptions for governance (policy, RBAC inheritance). They don't associate individual VMs with departments — they manage subscription-level hierarchy.";
+            if (optLower.includes('resource group')) return "Moving VMs into separate resource groups by department is possible but unnecessary and disruptive. Tags achieve the same organizational goal without restructuring resources.";
+            if (optLower.includes('settings') || optLower.includes('modify')) return "VM settings control compute/networking/disk configurations, not organizational metadata. There's no built-in 'department' setting on a VM.";
+        }
+
+        if (question.includes('conditional access')) {
+            if (optLower.includes('multi-factor authentication page') || optLower.includes('user settings')) {
+                if (isCorrect) return "This is the correct approach for the given scenario.";
+                return "The MFA user settings page enables/disables MFA per user but cannot enforce device requirements or location-based conditions. Conditional Access policies are needed for combining multiple conditions.";
+            }
+            if (optLower.includes('session control')) {
+                if (isCorrect) return "This is the correct approach for the given scenario.";
+                return "Session controls manage what happens AFTER sign-in (e.g., app-enforced restrictions, sign-in frequency). They don't enforce authentication requirements like MFA or device compliance at sign-in time.";
+            }
+            if (optLower.includes('grant control') || optLower.includes('conditional access')) {
+                if (isCorrect) return "Conditional Access grant controls let you require MFA AND compliant/Azure AD-joined devices simultaneously, with conditions for location (trusted/untrusted). This combines all the requirements in one policy.";
+                return "This approach addresses part of the requirement but may not fully satisfy all conditions specified.";
+            }
+        }
+
+        if (question.includes('ad connect') || question.includes('adsync') || question.includes('dirsync') || question.includes('sync')) {
+            if (optLower.includes('delta')) {
+                if (isCorrect) return "Delta sync (Start-ADSyncSyncCycle -PolicyType Delta) processes only changes since the last cycle. It's the fastest way to push a newly created user to Azure AD immediately without waiting for the 30-minute automatic cycle.";
+                return "Delta sync handles changes but may not be what's needed in this specific scenario.";
+            }
+            if (optLower.includes('initial') || optLower.includes('full')) {
+                if (isCorrect) return "An initial/full sync is required in this scenario to process all objects correctly.";
+                return "A full/initial sync reprocesses ALL objects, which is slow and unnecessary when you only need to sync a single new user. Delta sync is more efficient for individual changes.";
+            }
+            if (optLower.includes('sites and services') || optLower.includes('active directory sites')) {
+                return "Active Directory Sites and Services manages on-premises AD replication between domain controllers, not Azure AD Connect synchronization. It has no effect on cloud sync.";
+            }
+            if (optLower.includes('netlogon') || optLower.includes('restart')) {
+                return "Restarting the NetLogon service handles domain authentication and DC locator, not Azure AD sync. It's irrelevant to Azure AD Connect operations.";
+            }
+        }
+
+        if (question.includes('rbac') || question.includes('role-based') || (question.includes('role') && question.includes('assign'))) {
+            if (optLower.includes('owner')) {
+                if (isCorrect) return "The Owner role grants full access to all resources including the ability to assign roles to others via RBAC. It's the most privileged built-in role.";
+                return "Owner is too permissive for this scenario — it grants full access including role assignment, which violates the principle of least privilege.";
+            }
+            if (optLower.includes('contributor')) {
+                if (isCorrect) return "Contributor grants full access to manage all resources but cannot assign roles or manage access in Azure RBAC. It's appropriate when resource management is needed without access management.";
+                return "Contributor can manage resources but CANNOT assign roles to others. If role assignment is needed, a different role like Owner or User Access Administrator is required.";
+            }
+            if (optLower.includes('reader')) {
+                if (isCorrect) return "Reader allows viewing all resources but cannot make any changes. Appropriate for audit/monitoring scenarios.";
+                return "Reader is read-only and cannot create, modify, or delete any resources. It's insufficient when management actions are required.";
+            }
+            if (optLower.includes('user access administrator')) {
+                if (isCorrect) return "User Access Administrator can manage user access to Azure resources (assign roles) without managing the resources themselves.";
+                return "User Access Administrator only manages role assignments, not resource operations. It doesn't grant the ability to create or modify resources.";
+            }
+        }
+
+        // === STORAGE ===
+        if (question.includes('redundancy') || question.includes('geo-redundant') || question.includes('ra-grs') || question.includes('replication')) {
+            if (optLower.includes('ra-grs') || optLower.includes('read-access geo')) {
+                if (isCorrect) return "RA-GRS replicates data to a secondary region AND allows read access from that secondary. This provides both disaster recovery and read availability from the secondary endpoint.";
+                return "RA-GRS provides maximum redundancy with secondary read access, but may exceed the requirements or cost constraints of this scenario.";
+            }
+            if (optLower.includes('lrs') || optLower.includes('locally-redundant')) {
+                if (isCorrect) return "LRS stores 3 copies within a single datacenter. It's the lowest cost option and suitable when cross-region redundancy isn't required.";
+                return "LRS only replicates within a single datacenter. It doesn't protect against datacenter-level or regional failures — inadequate for geo-redundancy requirements.";
+            }
+            if (optLower.includes('grs') && !optLower.includes('ra-grs') && !optLower.includes('read-access')) {
+                if (isCorrect) return "GRS replicates to a secondary region for disaster recovery, but read access to secondary is only available after Microsoft initiates a failover.";
+                return "Standard GRS replicates to a secondary region but doesn't allow read access until a failover occurs. If read access from the secondary is needed, RA-GRS is required.";
+            }
+            if (optLower.includes('zrs') || optLower.includes('zone-redundant')) {
+                if (isCorrect) return "ZRS replicates across 3 availability zones within a single region, protecting against zone-level failures while keeping data in-region.";
+                return "ZRS provides high availability within a single region across availability zones, but doesn't replicate to a secondary geographic region for disaster recovery.";
+            }
+        }
+
+        if (question.includes('access tier') || question.includes('blob') && question.includes('tier')) {
+            if (optLower.includes('hot')) {
+                if (isCorrect) return "Hot tier is optimized for frequently accessed data. Highest storage cost but lowest access cost.";
+                return "Hot tier has the highest storage costs. It's not cost-effective for data accessed infrequently (30+ days between accesses).";
+            }
+            if (optLower.includes('cool')) {
+                if (isCorrect) return "Cool tier is optimized for data stored at least 30 days. Lower storage cost than Hot, higher access cost. Good for short-term backup and older data.";
+                return "Cool tier requires a minimum 30-day retention. Data deleted before 30 days incurs early deletion charges.";
+            }
+            if (optLower.includes('archive')) {
+                if (isCorrect) return "Archive tier has the lowest storage cost but data is offline. Retrieval requires rehydration (hours to days). Ideal for long-term retention with rare access.";
+                return "Archive tier stores data offline — it cannot be read or modified until rehydrated to Hot or Cool tier, which takes hours. Not suitable for data needing immediate access.";
+            }
+        }
+
+        // === COMPUTE ===
+        if (question.includes('availability set')) {
+            if (optLower.includes('stop') || optLower.includes('deallocate')) {
+                if (isCorrect) return "All VMs in an availability set share the same hardware cluster. To resize, you must deallocate ALL VMs so Azure can reallocate them to a cluster that supports the new size.";
+                return "Stopping VMs releases compute resources but may not address the specific requirement in this scenario.";
+            }
+            if (optLower.includes('fault domain')) {
+                if (isCorrect) return "Fault domains protect against hardware failures (shared power/network). Setting this correctly ensures VMs are distributed across physical racks.";
+                return "Fault domains handle hardware failure isolation, not the resize allocation issue. The cluster constraint requires deallocation.";
+            }
+        }
+
+        if (question.includes('arm template') || question.includes('azure resource manager')) {
+            if (optLower.includes('resource group') && (optLower.includes('deployment') || question.includes('review'))) {
+                if (isCorrect) return "ARM deployments are tracked per Resource Group. The Deployments blade shows full history including the template JSON, parameters, inputs, and outputs for each deployment.";
+                return "While resource groups track deployments, this option may not fully address the specific requirement.";
+            }
+            if (optLower.includes('key vault') || optLower.includes('secret')) {
+                if (isCorrect) return "Key Vault references in ARM templates allow you to pass secrets securely as parameters without storing them in plain text in template files or parameter files.";
+                return "Key Vault stores secrets but doesn't directly solve the template review/deployment tracking question.";
+            }
+        }
+
+        if (question.includes('app service') || question.includes('web app')) {
+            if (optLower.includes('deployment slot')) {
+                if (isCorrect) return "Deployment slots (Standard tier+) allow deploying to a staging environment and swapping to production with zero downtime. Slot settings can be made 'sticky' to stay with the slot.";
+                return "Deployment slots require Standard tier or above. They're for zero-downtime deployments, not for the specific requirement in this scenario.";
+            }
+            if (optLower.includes('scale')) {
+                if (isCorrect) return "Auto-scale allows you to automatically adjust the number of instances based on metrics like CPU percentage, memory, or custom metrics.";
+                return "Scaling adjusts capacity but doesn't address the specific deployment or configuration requirement.";
+            }
+        }
+
+        // === NETWORKING ===
+        if (question.includes('peering') || question.includes('virtual network') && question.includes('connect')) {
+            if (optLower.includes('peering')) {
+                if (isCorrect) return "VNet peering provides low-latency, high-bandwidth connectivity using Azure's backbone. It's non-transitive: peered VNets can communicate, but their peers cannot without direct peering.";
+                return "Peering connects VNets but is non-transitive. Traffic doesn't flow through a peered network to reach a third network without additional configuration.";
+            }
+            if (optLower.includes('gateway') || optLower.includes('vpn')) {
+                if (isCorrect) return "A VPN gateway enables encrypted tunnel connectivity between networks, useful for cross-region or hybrid scenarios.";
+                return "VPN gateways add complexity and latency. For VNet-to-VNet within Azure, peering is simpler and provides better performance without encryption overhead.";
+            }
+        }
+
+        if (question.includes('nsg') || question.includes('network security group')) {
+            if (optLower.includes('priority') || optLower.includes('rule')) {
+                if (isCorrect) return "NSG rules are evaluated by priority (lower number = higher priority, range 100-4096). The first matching rule wins. Both inbound and outbound rules are processed independently.";
+                return "NSG rule priority determines evaluation order. A lower priority number means the rule is evaluated earlier and takes precedence.";
+            }
+            if (optLower.includes('subnet') || optLower.includes('nic')) {
+                if (isCorrect) return "NSGs can be associated to subnets (affects all resources in the subnet) or NICs (affects only that specific VM). Both can be applied simultaneously — traffic must pass both.";
+                return "While NSGs can be attached here, the specific association doesn't address the requirement in this question.";
+            }
+        }
+
+        if (question.includes('load balancer')) {
+            if (optLower.includes('standard')) {
+                if (isCorrect) return "Standard Load Balancer provides zone redundancy, SLA guarantee, supports availability zones, and allows cross-VNet backend pools. Required for production workloads.";
+                return "Standard SKU has more features but also different defaults (closed by default via NSG). Consider if the basic requirements need Standard capabilities.";
+            }
+            if (optLower.includes('basic')) {
+                if (isCorrect) return "Basic Load Balancer is suitable for small-scale testing with limited features (no SLA, no zone redundancy, open by default).";
+                return "Basic Load Balancer lacks SLA, zone redundancy, and will be retired. It's not recommended for production workloads.";
+            }
+            if (optLower.includes('health probe')) {
+                if (isCorrect) return "Health probes determine backend availability. If a probe fails, the load balancer stops sending traffic to that instance until it recovers.";
+                return "Health probes monitor backend health but don't address the specific configuration needed here.";
+            }
+        }
+
+        if (question.includes('vpn') || question.includes('expressroute')) {
+            if (optLower.includes('expressroute')) {
+                if (isCorrect) return "ExpressRoute provides private, dedicated connectivity to Azure through a connectivity provider — not over the public internet. Offers predictable performance, lower latency, and higher security.";
+                return "ExpressRoute requires a connectivity provider and is more expensive. It's overkill if encrypted internet connectivity (VPN) meets the requirements.";
+            }
+            if (optLower.includes('site-to-site') || optLower.includes('s2s')) {
+                if (isCorrect) return "Site-to-Site VPN creates an encrypted IPsec tunnel between on-premises and Azure over the public internet. Requires a VPN device on-premises.";
+                return "S2S VPN goes over public internet with encryption. For dedicated private connectivity without internet traversal, ExpressRoute is needed.";
+            }
+            if (optLower.includes('point-to-site') || optLower.includes('p2s')) {
+                if (isCorrect) return "Point-to-Site VPN connects individual client computers to Azure VNet. Ideal for remote workers without requiring a VPN device.";
+                return "P2S VPN is for individual clients, not site-to-site connectivity. It doesn't connect an entire on-premises network.";
+            }
+        }
+
+        if (question.includes('dns')) {
+            if (optLower.includes('private') && optLower.includes('zone')) {
+                if (isCorrect) return "Azure Private DNS zones provide name resolution within VNets without needing custom DNS servers. They support auto-registration of VM records.";
+                return "Private DNS zones work within VNets for internal resolution. They don't resolve for external/internet clients.";
+            }
+            if (optLower.includes('cname') || optLower.includes('alias')) {
+                if (isCorrect) return "CNAME records create an alias pointing to another domain name. Useful for pointing custom domains to Azure-managed endpoints.";
+                return "CNAME records alias to another domain but cannot be at the zone apex (@). For apex domains, use an Alias record set.";
+            }
+        }
+
+        // === MONITORING ===
+        if (question.includes('monitor') || question.includes('alert') || question.includes('diagnostic') || question.includes('log analytics')) {
+            if (optLower.includes('action group')) {
+                if (isCorrect) return "Action groups define notification and automation responses to alerts — email, SMS, webhooks, Azure Functions, Logic Apps, ITSM. Reusable across multiple alert rules.";
+                return "Action groups handle alert responses but don't address the monitoring configuration or data collection requirement.";
+            }
+            if (optLower.includes('diagnostic setting')) {
+                if (isCorrect) return "Diagnostic settings stream platform metrics and logs to destinations: Log Analytics, Storage Account, or Event Hubs. Required to collect resource-level logs.";
+                return "Diagnostic settings collect data but are not the alert mechanism itself.";
+            }
+        }
+
+        if (question.includes('backup') || question.includes('recovery services')) {
+            if (optLower.includes('recovery services vault')) {
+                if (isCorrect) return "Recovery Services vault stores backup data and backup policies. Must be in the same region as the resource being protected. Supports VMs, SQL, Files, and more.";
+                return "Recovery Services vault stores backups but the vault alone doesn't address all aspects of this requirement.";
+            }
+            if (optLower.includes('policy') || optLower.includes('schedule')) {
+                if (isCorrect) return "Backup policies define the schedule (daily/weekly) and retention period (days/weeks/months/years) for backed-up data.";
+                return "Backup policies define schedules but may not be the specific configuration needed here.";
+            }
+        }
+
+        // === GOVERNANCE ===
+        if (question.includes('policy') && (question.includes('azure') || question.includes('compliance'))) {
+            if (optLower.includes('deny')) {
+                if (isCorrect) return "The Deny effect prevents resource creation or modification that violates the policy rule. It blocks non-compliant operations in real-time.";
+                return "Deny blocks operations but doesn't remediate existing non-compliant resources. For retroactive enforcement, DeployIfNotExists or Modify may be needed.";
+            }
+            if (optLower.includes('audit')) {
+                if (isCorrect) return "Audit effect logs non-compliant resources in the activity log and marks them non-compliant, but doesn't prevent or modify them. Good for visibility.";
+                return "Audit only reports non-compliance — it doesn't prevent non-compliant deployments or fix existing resources.";
+            }
+            if (optLower.includes('deployifnotexists')) {
+                if (isCorrect) return "DeployIfNotExists evaluates the resource and deploys a related resource if the condition isn't met (e.g., auto-deploy diagnostics settings). Runs during create/update.";
+                return "DeployIfNotExists deploys related resources but doesn't deny or block the original resource creation.";
+            }
+        }
+
+        // === GENERAL FALLBACK with context-aware reasoning ===
+        if (isCorrect) {
+            return this.explainCorrectAnswer(q);
+        } else {
+            return this.explainWhyWrong(q, optText);
+        }
+    },
+
+    explainCorrectAnswer(q) {
         const question = q.question.toLowerCase();
         const answer = q.correctAnswers.join(' ').toLowerCase();
         
-        // Match explanations based on question content patterns
-        if (answer.includes('tag')) {
-            return "Tags are name-value pairs that allow you to categorize and organize Azure resources. They can be applied to resources, resource groups, and subscriptions to logically organize them by categories such as department, environment, or cost center.";
-        }
-        if (question.includes('conditional access') && answer.includes('grant control')) {
-            return "The grant control in a Conditional Access policy is where you configure requirements like MFA, compliant device, or Azure AD-joined device. Session controls manage the experience after sign-in, not the authentication requirements.";
-        }
-        if (question.includes('conditional access') && answer.includes('no')) {
-            return "Conditional Access policies are the recommended way to enforce MFA and device requirements based on conditions like location. The multi-factor authentication page user settings and session controls alone don't provide the combined location-based + device-based + MFA requirements needed.";
-        }
-        if (question.includes('multi-factor authentication') && question.includes('usage model')) {
-            if (answer.includes('new') || answer.includes('create')) {
-                return "Once a Multi-Factor Authentication provider is created, the usage model (Per Authentication or Per Enabled User) cannot be changed. You must create a new provider with the desired usage model and migrate/backup data from the existing one.";
-            }
-            return "The usage model for an MFA provider cannot be changed after creation through the portal or CLI. A new provider must be created with the correct usage model.";
-        }
-        if (question.includes('dirsync') || question.includes('ad connect') || question.includes('adsync')) {
-            if (answer.includes('delta')) {
-                return "Running Start-ADSyncSyncCycle -PolicyType Delta performs a delta sync which only processes changes since the last sync cycle. This is the fastest way to replicate a new user to Azure AD immediately.";
-            }
-            if (answer.includes('initial')) {
-                return "An Initial sync processes ALL objects and is time-consuming. For immediate replication of a new user, a Delta sync (Start-ADSyncSyncCycle -PolicyType Delta) is the correct approach as it only syncs changes.";
-            }
-            return "Azure AD Connect sync cycles handle replication between on-premises AD and Azure AD. Delta sync processes only changes, while Initial sync processes everything. Using Active Directory Sites and Services or restarting NetLogon handles on-premises AD replication, not Azure AD sync.";
-        }
-        if (question.includes('redundancy') || question.includes('geo-redundant') || question.includes('ra-grs')) {
-            return "Read-Access Geo-Redundant Storage (RA-GRS) stores data across multiple nodes in separate geographic locations AND allows read access from the secondary region. Standard GRS replicates to a secondary region but doesn't allow read access until failover.";
-        }
-        if (question.includes('arm template') && question.includes('review')) {
-            if (answer.includes('resource group')) {
-                return "ARM template deployments are tracked at the Resource Group level. You can view deployment history, including the templates used, by navigating to the Resource Group blade → Deployments section.";
-            }
-            return "To review ARM templates used for deployments, check the Resource Group's Deployments blade where all deployment history and templates are stored.";
-        }
-        if (question.includes('availability set') && question.includes('resize')) {
-            return "When you get an allocation failure resizing a VM in an availability set, you must stop (deallocate) ALL VMs in the availability set. This is because all VMs in an availability set must be allocated from the same hardware cluster.";
-        }
-        if (question.includes('fault domain') || question.includes('platformfaultdomaincount')) {
-            return "The platformFaultDomainCount should be set to the maximum value (2 or 3 depending on region) to ensure VMs are distributed across as many fault domains as possible, providing maximum protection against hardware failures.";
-        }
-        if (question.includes('update domain') || question.includes('platformupdatedomaincount')) {
-            return "The platformUpdateDomainCount can be set up to 20 (the maximum). Setting it to the maximum value ensures VMs are distributed across as many update domains as possible, minimizing the impact of planned maintenance.";
-        }
-        if (question.includes('key vault') || question.includes('password') && question.includes('plain text')) {
-            return "Azure Key Vault is designed to store secrets, keys, and certificates securely. When using ARM templates, you can reference Key Vault secrets as parameters to avoid storing sensitive data in plain text.";
-        }
-        if (question.includes('virtual network') && question.includes('peering')) {
-            return "VNet peering allows virtual networks to communicate using Azure's backbone network. It's non-transitive — if VNet A peers with VNet B, and VNet B peers with VNet C, VNet A cannot communicate with VNet C unless directly peered.";
-        }
-        if (question.includes('nsg') || question.includes('network security group')) {
-            return "Network Security Groups filter traffic using priority-based rules (lower number = higher priority). They can be associated to subnets or NICs. NSGs are stateful — if inbound traffic is allowed, return traffic is automatically permitted.";
-        }
-        if (question.includes('load balancer')) {
-            return "Azure Load Balancer operates at Layer 4 (TCP/UDP). Use Standard SKU for production workloads as it provides an SLA, zone redundancy, and more features than Basic. Health probes determine backend pool member availability.";
-        }
-        if (question.includes('azure monitor') || question.includes('alert') || question.includes('diagnostic')) {
-            return "Azure Monitor collects metrics (numeric time-series data) and logs (structured data) from Azure resources. Alerts can be configured on metrics, logs, or activity log events, with action groups defining the notification/automation response.";
-        }
-        if (question.includes('backup') || question.includes('recovery services')) {
-            return "Azure Backup uses Recovery Services vaults to store backup data. The vault must be in the same region as the protected resource. Backup policies define the schedule and retention period for backups.";
-        }
-        if (question.includes('app service') || question.includes('web app')) {
-            return "Azure App Service is a fully managed platform for hosting web apps. Deployment slots (Standard tier+) allow zero-downtime deployments by swapping slots. Auto-scale rules can be based on metrics like CPU usage.";
-        }
-        if (question.includes('container') || question.includes('aci') || question.includes('kubernetes') || question.includes('aks')) {
-            return "Azure Container Instances (ACI) provides serverless containers for quick deployments. AKS is a managed Kubernetes service for orchestrating containers at scale. ACI is ideal for burst workloads; AKS for long-running production workloads.";
-        }
-        if (question.includes('dns') && !question.includes('dirsync')) {
-            return "Azure DNS supports both public zones (internet-facing resolution) and private zones (VNet-internal resolution). Common record types: A (IPv4), AAAA (IPv6), CNAME (alias to another domain), MX (mail exchange), TXT (verification).";
-        }
-        if (question.includes('vpn') || question.includes('expressroute')) {
-            return "VPN Gateway provides encrypted tunnels over the public internet (Site-to-Site, Point-to-Site). ExpressRoute provides private connectivity to Azure through a connectivity provider, offering higher reliability, faster speeds, and lower latencies.";
-        }
-        if (question.includes('storage account') || question.includes('blob') || question.includes('access tier')) {
-            return "Azure Storage accounts support multiple redundancy options and access tiers. Hot tier is for frequently accessed data, Cool for 30+ day storage, Cold for 90+ days, and Archive for 180+ days (offline, requires rehydration).";
-        }
-        if (question.includes('azure ad') || question.includes('active directory')) {
-            return "Azure Active Directory (now Microsoft Entra ID) is Microsoft's cloud-based identity and access management service. It supports user/group management, conditional access, RBAC, and hybrid identity with on-premises AD sync.";
-        }
-        if (question.includes('policy') && (question.includes('azure') || question.includes('governance'))) {
-            return "Azure Policy evaluates resources for compliance with business rules. Policies can audit, deny, or modify resources. Policy initiatives group multiple policies together. Effects include Deny, Audit, DeployIfNotExists, and Modify.";
-        }
-        if (question.includes('rbac') || question.includes('role')) {
-            return "RBAC provides fine-grained access management. Roles are assigned at a scope (management group, subscription, resource group, or resource). The built-in Owner role has full access including role assignment; Contributor has full access except role assignment.";
-        }
-        if (question.includes('virtual machine') || question.includes('vm')) {
-            return "Azure Virtual Machines can be protected using Availability Sets (fault/update domains within a datacenter) or Availability Zones (separate physical locations within a region). Scale Sets enable auto-scaling of identical VMs.";
-        }
-
-        // Default explanation based on topic
+        if (answer.includes('yes')) return "This solution correctly satisfies all the stated requirements in the scenario.";
+        if (answer.includes('no')) return "This solution does NOT satisfy all requirements. The approach described is either incomplete, uses the wrong feature, or addresses the wrong layer of the problem.";
+        
         const topicInfo = TOPICS[q.topic];
         if (topicInfo) {
-            return `This question relates to the "${topicInfo.name}" domain of the AZ-104 exam. The correct answer is based on Azure best practices and service capabilities for this topic area. Review the Study Notes section for more details on this topic.`;
+            return `This is correct because it directly addresses the requirement using the appropriate Azure service/feature in the ${topicInfo.name} domain. It follows Azure best practices and is the most efficient solution.`;
         }
-        return "Review the correct answer and consult the Study Notes section for detailed explanations on this topic area.";
+        return "This is the correct answer based on Azure documentation and best practices.";
+    },
+
+    explainWhyWrong(q, optText) {
+        const opt = optText.toLowerCase();
+        const question = q.question.toLowerCase();
+        
+        // Common wrong answer patterns
+        if (opt.includes('yes') && q.correctAnswers.some(a => a.toLowerCase().includes('no'))) {
+            return "The proposed solution does NOT meet all the goals. While it may address part of the requirement, it fails to satisfy one or more key conditions specified in the question.";
+        }
+        if (opt.includes('no') && q.correctAnswers.some(a => a.toLowerCase().includes('yes'))) {
+            return "The proposed solution actually DOES meet the goals. The approach described correctly addresses all stated requirements.";
+        }
+        
+        // Generic but helpful
+        return "This option either addresses a different problem, uses an inappropriate service/feature for the stated requirement, or doesn't fully satisfy all conditions specified in the question.";
     },
 
     prevQuestion() {
@@ -395,6 +605,27 @@ const app = {
     randomQuestion() {
         this.currentQuestionIndex = Math.floor(Math.random() * this.filteredQuestions.length);
         this.renderQuestion();
+    },
+
+    gotoQuestion() {
+        const input = document.getElementById('question-search');
+        const num = parseInt(input.value);
+        if (!num || num < 1 || num > this.questions.length) {
+            input.style.borderColor = 'var(--danger)';
+            setTimeout(() => input.style.borderColor = '', 1000);
+            return;
+        }
+        // Reset filters to "all" so the question is findable
+        document.getElementById('topic-filter').value = 'all';
+        document.getElementById('status-filter').value = 'all';
+        this.filteredQuestions = [...this.questions];
+        // Find by question id
+        const idx = this.filteredQuestions.findIndex(q => q.id === num);
+        if (idx !== -1) {
+            this.currentQuestionIndex = idx;
+            this.renderQuestion();
+            input.value = '';
+        }
     },
 
     // === Flashcards (Based on Microsoft Learn Concepts) ===

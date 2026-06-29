@@ -195,6 +195,32 @@ body {
     background: var(--card-bg);
 }
 
+.search-box {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.search-box input {
+    width: 90px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--card-bg);
+}
+
+.search-box input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(0,120,212,0.15);
+}
+
+.btn-sm {
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
 .question-container {
     max-width: 800px;
 }
@@ -312,6 +338,38 @@ body {
     font-size: 14px;
     line-height: 1.7;
     color: #1a3a5c;
+}
+
+.option-explanation {
+    margin-top: 10px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.option-explanation.option-correct {
+    background: #d4edda;
+    border-left: 3px solid var(--success);
+    color: #155724;
+}
+
+.option-explanation.option-wrong {
+    background: #f8f9fa;
+    border-left: 3px solid #adb5bd;
+    color: #495057;
+}
+
+.option-explanation strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.explanation-header {
+    font-weight: 700;
+    font-size: 15px;
+    margin-bottom: 10px;
+    color: var(--primary);
 }
 
 .question-actions {
