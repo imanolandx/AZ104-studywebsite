@@ -335,13 +335,13 @@ const app = {
         const optLower = optText.toLowerCase();
         const answer = q.correctAnswers.join(' ').toLowerCase();
 
+        // FIRST: Try cmdlet/command dictionary lookup (highest priority for command-based options)
+        const cmdletExplanation = this.explainCmdlet(optText, optLower, isCorrect, q);
+        if (cmdletExplanation) return cmdletExplanation;
+
         // Try to get a specific explanation from the knowledge base
         const specific = this.getSpecificExplanation(question, optLower, optText, isCorrect, q);
         if (specific) return specific;
-
-        // Try cmdlet/command dictionary lookup
-        const cmdletExplanation = this.explainCmdlet(optText, optLower, isCorrect, q);
-        if (cmdletExplanation) return cmdletExplanation;
 
         // Fallback: analyze option keywords to provide technical context
         const techExplanation = this.getTechExplanation(optLower, isCorrect, question);
@@ -425,8 +425,8 @@ const app = {
                 "<b>SetupComplete.cmd</b> (%WINDIR%\\Setup\\Scripts\\) is a one-time post-setup script that runs ONLY after Windows initial installation or sysprep completes. It does NOT run on regular reboots or subsequent startups. For recurring execution on every boot, this is the wrong mechanism — GPO Startup Scripts or Scheduled Tasks are needed instead.";
         }
 
-        // === VHD ===
-        if (optLower.includes('virtual hard disk') || optLower.includes('vhd')) {
+        // === VHD (only for text options like "Place scripts in a VHD", not cmdlets like Add-AzVhd) ===
+        if ((optLower.includes('virtual hard disk') || (optLower.includes('vhd') && !optLower.includes('-az'))) && optLower.length > 10) {
             return isCorrect ?
                 "<b>Virtual Hard Disk (VHD)</b> is used here to distribute or store the scripts. This is the correct approach for this scenario." :
                 "<b>Virtual Hard Disk (VHD)</b> is a disk image format used by Hyper-V and Azure VMs. Simply placing scripts IN a VHD does not automatically execute them. A VHD is just storage — there's no built-in mechanism to run scripts placed inside it without additional configuration (mount + scheduled task/GPO).";
@@ -452,36 +452,7 @@ const app = {
             }
         }
 
-        // === POWERSHELL COMMANDS ===
-        if (optLower.includes('new-azvm') || optLower.includes('new-azurermvm')) {
-            return isCorrect ?
-                "<b>New-AzVM</b> creates a new Azure virtual machine via PowerShell. Parameters include -ResourceGroupName, -Name, -Location, -Image, -Size, -Credential. It provisions compute, OS disk, and NIC automatically." :
-                "<b>New-AzVM</b> creates virtual machines but doesn't address the specific requirement in this scenario.";
-        }
-        if (optLower.includes('set-az') || optLower.includes('update-az')) {
-            const cmdlet = optText.match(/\b(Set-Az\w+|Update-Az\w+)/i);
-            if (cmdlet) {
-                return isCorrect ?
-                    `<b>${cmdlet[0]}</b> modifies an existing Azure resource's configuration. This is the correct cmdlet to update the property/setting required in this scenario.` :
-                    `<b>${cmdlet[0]}</b> modifies an existing resource but either targets the wrong resource type, wrong property, or operates at the wrong scope for this requirement.`;
-            }
-        }
-        if (optLower.includes('get-az')) {
-            const cmdlet = optText.match(/\b(Get-Az\w+)/i);
-            if (cmdlet) {
-                return isCorrect ?
-                    `<b>${cmdlet[0]}</b> retrieves information about the specified Azure resource. This read operation provides the data needed for this scenario.` :
-                    `<b>${cmdlet[0]}</b> is a read/query cmdlet — it only RETRIEVES information, it doesn't CREATE or MODIFY resources. If the question requires making changes, a Set-/New-/Update- cmdlet is needed.`;
-            }
-        }
-        if (optLower.includes('remove-az')) {
-            const cmdlet = optText.match(/\b(Remove-Az\w+)/i);
-            if (cmdlet) {
-                return isCorrect ?
-                    `<b>${cmdlet[0]}</b> deletes the specified Azure resource. This is the correct operation for the removal scenario described.` :
-                    `<b>${cmdlet[0]}</b> DELETES resources permanently. If the requirement is to modify, configure, or create — not destroy — this is the wrong verb.`;
-            }
-        }
+        // === POWERSHELL COMMANDS (now handled by explainCmdlet - only keep New-AzVM for context) ===
 
         // === RBAC ROLES ===
         if (optLower.includes('owner') && (question.includes('role') || question.includes('rbac') || question.includes('permission') || question.includes('access'))) {
@@ -1115,84 +1086,91 @@ const app = {
     },
 
     explainCmdlet(optText, optLower, isCorrect, q) {
-        // Try to find a cmdlet name in the option
-        const cmdletMatch = optText.match(/\b([A-Z][a-z]+-Az[A-Za-z]*|[A-Z][a-z]+-AzureAD[A-Za-z]*|[A-Z][a-z]+-ADSync[A-Za-z]*|[A-Z][a-z]+-Msol[A-Za-z]*|[A-Z][a-z]+-Mg[A-Za-z]*)/);
-        if (!cmdletMatch) return null;
+        // Try to find a cmdlet name in the option (Verb-Noun pattern)
+        const cmdletMatch = optText.match(/(?:^|\b)([A-Z][a-z]+-(?:Az|AzureAD|AzureADMS|ADSync|Msol|Mg)[A-Za-z]*)/);
+        if (!cmdletMatch) {
+            // Also try a more general PowerShell cmdlet pattern (Verb-Noun with dash)
+            const generalMatch = optText.match(/(?:^|\b)([A-Z][a-z]+(?:[A-Z][a-z]*)*-[A-Z][a-z]+[A-Za-z]*)/);
+            if (!generalMatch) return null;
+            // Check if it looks like an Azure cmdlet
+            const cmd = generalMatch[0].toLowerCase();
+            if (!this.cmdletDB[cmd] && !cmd.includes('-az') && !cmd.includes('-msol') && !cmd.includes('-mg')) return null;
+            return this._formatCmdletExplanation(generalMatch[0], isCorrect, q);
+        }
+        return this._formatCmdletExplanation(cmdletMatch[1], isCorrect, q);
+    },
 
-        const cmdlet = cmdletMatch[0];
+    _formatCmdletExplanation(cmdlet, isCorrect, q) {
         const cmdletKey = cmdlet.toLowerCase();
         const correctAnswer = q.correctAnswers[0] ? q.correctAnswers[0].replace(/^[A-Z]\.\s*/, '').trim() : '';
         
         // Look up in dictionary
         const description = this.cmdletDB[cmdletKey];
         
+        // Get correct answer's cmdlet info
+        const correctCmdletMatch = correctAnswer.match(/(?:^|\b)([A-Z][a-z]+-(?:Az|AzureAD|AzureADMS|ADSync|Msol|Mg)[A-Za-z]*)/);
+        let correctInfo = '';
+        if (!isCorrect && correctCmdletMatch) {
+            const correctDesc = this.cmdletDB[correctCmdletMatch[1] ? correctCmdletMatch[1].toLowerCase() : correctCmdletMatch[0].toLowerCase()];
+            const correctName = correctCmdletMatch[1] || correctCmdletMatch[0];
+            if (correctDesc) {
+                correctInfo = `<br><br>✅ <b>Correct: ${correctName}</b> — ${correctDesc}`;
+            } else {
+                correctInfo = `<br><br>✅ <b>Correct: ${correctName}</b>`;
+            }
+        }
+
         if (description) {
             if (isCorrect) {
-                return `<b>${cmdlet}</b> — ${description}<br><br>✅ This is the correct cmdlet because it performs exactly the operation required by the question.`;
+                return `<b>${cmdlet}</b> — ${description}<br><br>✅ This is the correct cmdlet for this scenario.`;
             } else {
-                // Also explain what the correct cmdlet does
-                const correctCmdletMatch = correctAnswer.match(/\b([A-Z][a-z]+-Az[A-Za-z]*|[A-Z][a-z]+-AzureAD[A-Za-z]*|[A-Z][a-z]+-ADSync[A-Za-z]*|[A-Z][a-z]+-Msol[A-Za-z]*|[A-Z][a-z]+-Mg[A-Za-z]*)/);
-                let correctInfo = '';
-                if (correctCmdletMatch) {
-                    const correctDesc = this.cmdletDB[correctCmdletMatch[0].toLowerCase()];
-                    if (correctDesc) {
-                        correctInfo = `<br><br>✅ <b>Correct: ${correctCmdletMatch[0]}</b> — ${correctDesc}`;
-                    }
-                }
-                return `<b>${cmdlet}</b> — ${description}<br><br>❌ This is NOT what the question asks for. It performs a different operation than what's required.${correctInfo}`;
+                return `<b>${cmdlet}</b> — ${description}<br><br>❌ Wrong cmdlet for this requirement.${correctInfo}`;
             }
         }
         
-        // Cmdlet found but not in dictionary — generate explanation from name pattern
+        // Cmdlet found but not in dictionary — generate from verb-noun pattern
         const verb = cmdlet.split('-')[0].toLowerCase();
         const noun = cmdlet.split('-').slice(1).join('-');
         
         const verbMeanings = {
             'new': 'Creates a new resource/object',
-            'set': 'Modifies properties of an existing resource',
-            'get': 'Retrieves/reads information (read-only)',
-            'remove': 'Deletes a resource permanently',
-            'add': 'Adds an item to a collection or configuration',
-            'update': 'Applies pending changes to a resource',
-            'start': 'Starts a process or resource',
-            'stop': 'Stops a running process or resource',
-            'restart': 'Restarts a resource',
-            'move': 'Moves a resource to a different container/scope',
-            'export': 'Exports data or configuration to file',
-            'import': 'Imports data or configuration from file',
-            'enable': 'Enables a feature or protection',
-            'disable': 'Disables a feature or protection',
-            'register': 'Registers a provider or resource',
-            'unregister': 'Unregisters a provider or resource',
-            'test': 'Validates/tests without executing',
-            'invoke': 'Executes an action or command',
-            'backup': 'Creates a backup',
-            'restore': 'Restores from a backup',
-            'publish': 'Deploys/publishes content',
-            'switch': 'Swaps or switches between configurations',
-            'save': 'Saves/downloads to local storage',
-            'select': 'Selects/sets the current context',
-            'grant': 'Grants permissions or access',
-            'revoke': 'Revokes permissions or access'
+            'set': 'Modifies/configures an existing resource',
+            'get': 'Retrieves/reads information (read-only, no changes)',
+            'remove': 'Permanently deletes a resource',
+            'add': 'Adds an item to a collection or attaches a component',
+            'update': 'Applies queued/pending changes to a resource',
+            'start': 'Starts/triggers a process or resource',
+            'stop': 'Stops/deallocates a running resource',
+            'restart': 'Restarts a running resource',
+            'move': 'Moves a resource between containers/scopes',
+            'export': 'Exports configuration to a file/template',
+            'import': 'Imports configuration from a file/source',
+            'enable': 'Enables a feature, protection, or service',
+            'disable': 'Disables a feature or service',
+            'register': 'Registers a provider or resource type',
+            'unregister': 'Unregisters a provider',
+            'test': 'Validates without executing (dry-run/what-if)',
+            'invoke': 'Executes an action or runs a command',
+            'backup': 'Creates a backup copy',
+            'restore': 'Restores from a backup/recovery point',
+            'publish': 'Deploys/publishes content to a service',
+            'switch': 'Swaps between two configurations (e.g., slots)',
+            'save': 'Downloads/saves to local storage',
+            'select': 'Sets the current working context',
+            'grant': 'Grants permissions or access rights',
+            'revoke': 'Revokes permissions or access rights',
+            'connect': 'Establishes a connection to a service',
+            'disconnect': 'Closes a connection',
+            'lock': 'Applies a resource lock',
+            'unlock': 'Removes a resource lock'
         };
         
-        const verbDesc = verbMeanings[verb] || `Performs the "${verb}" operation`;
+        const verbDesc = verbMeanings[verb] || `Performs the "${verb}" operation on`;
         
         if (isCorrect) {
-            return `<b>${cmdlet}</b> — ${verbDesc} for ${noun}. This cmdlet performs the exact operation needed for this scenario.`;
+            return `<b>${cmdlet}</b> — ${verbDesc} ${noun}. This is the correct cmdlet for the scenario described.`;
         } else {
-            let correctInfo = '';
-            const correctCmdletMatch = correctAnswer.match(/\b([A-Z][a-z]+-Az[A-Za-z]*|[A-Z][a-z]+-AzureAD[A-Za-z]*)/);
-            if (correctCmdletMatch) {
-                const cVerb = correctCmdletMatch[0].split('-')[0].toLowerCase();
-                const cNoun = correctCmdletMatch[0].split('-').slice(1).join('-');
-                const cVerbDesc = verbMeanings[cVerb] || `Performs "${cVerb}"`;
-                const cDict = this.cmdletDB[correctCmdletMatch[0].toLowerCase()];
-                correctInfo = cDict 
-                    ? `<br><br>✅ <b>Correct: ${correctCmdletMatch[0]}</b> — ${cDict}`
-                    : `<br><br>✅ <b>Correct: ${correctCmdletMatch[0]}</b> — ${cVerbDesc} for ${cNoun}.`;
-            }
-            return `<b>${cmdlet}</b> — ${verbDesc} for ${noun}. This performs a different operation than what's needed here.${correctInfo}`;
+            return `<b>${cmdlet}</b> — ${verbDesc} ${noun}. This performs a different operation than what's required.${correctInfo}`;
         }
     },
 
