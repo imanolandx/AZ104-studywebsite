@@ -22,6 +22,7 @@ const app = {
         this.setupNotes();
         this.updateDashboard();
         this.populateTopicFilters();
+        this.populateQuestionList();
     },
 
     // === Navigation ===
@@ -139,6 +140,14 @@ const app = {
         document.getElementById('question-search').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') this.gotoQuestion();
         });
+        document.getElementById('question-list').addEventListener('change', (e) => {
+            const idx = parseInt(e.target.value);
+            if (!isNaN(idx)) {
+                this.currentQuestionIndex = idx;
+                this.renderQuestion();
+                e.target.value = '';
+            }
+        });
         this.renderQuestion();
     },
 
@@ -167,7 +176,20 @@ const app = {
         });
 
         this.currentQuestionIndex = 0;
+        this.populateQuestionList();
         this.renderQuestion();
+    },
+
+    populateQuestionList() {
+        const list = document.getElementById('question-list');
+        const topic = document.getElementById('topic-filter').value;
+        const label = topic === 'all' ? 'Browse Questions' : 'Browse Topic Questions';
+        list.innerHTML = `<option value="">${label} (${this.filteredQuestions.length})</option>`;
+        this.filteredQuestions.forEach((q, idx) => {
+            const preview = q.question.substring(0, 60).replace(/\n/g, ' ');
+            const status = this.progress[q.id] ? (this.progress[q.id].correct ? '✅' : '❌') : '○';
+            list.innerHTML += `<option value="${idx}">${status} Q${q.id}: ${preview}...</option>`;
+        });
     },
 
     renderQuestion() {
@@ -290,8 +312,10 @@ const app = {
         answerSection.classList.remove('hidden');
         const explanation = this.getExplanation(q);
         
-        // For drag-drop questions, the visualization IS the answer
-        const isDragDrop = (!q.options || q.options.length === 0) && typeof DRAGDROP_ANSWERS !== 'undefined' && DRAGDROP_ANSWERS[q.id];
+        // For drag-drop/hotspot questions, the visualization IS the answer
+        const isDragDrop = (!q.options || q.options.length === 0) && 
+            ((typeof DRAGDROP_ANSWERS !== 'undefined' && DRAGDROP_ANSWERS[q.id]) || 
+             (typeof HOTSPOT_ANSWERS !== 'undefined' && HOTSPOT_ANSWERS[q.id]));
         
         if (isDragDrop) {
             document.getElementById('answer-reveal').innerHTML = explanation;
@@ -327,8 +351,11 @@ const app = {
                 </div>`;
             });
         } else if (typeof DRAGDROP_ANSWERS !== 'undefined' && DRAGDROP_ANSWERS[q.id]) {
-            // Drag-and-drop / hotspot visual answer
+            // Drag-and-drop visual answer
             html = this.renderDragDropAnswer(q, DRAGDROP_ANSWERS[q.id]);
+        } else if (typeof HOTSPOT_ANSWERS !== 'undefined' && HOTSPOT_ANSWERS[q.id]) {
+            // Hotspot visual answer
+            html = this.renderHotspotAnswer(q, HOTSPOT_ANSWERS[q.id]);
         } else {
             // Fallback for questions without answer data
             html += `<div class="option-explanation" style="border-left:3px solid #ff9800;padding:12px;background:#fff8e1;">
@@ -368,6 +395,48 @@ const app = {
                     <div class="match-answer">${item.answer}</div>
                 </div>
                 <div class="match-explanation">${item.explanation}</div>`;
+            });
+            html += `</div>`;
+        }
+
+        html += `</div>`;
+        return html;
+    },
+
+    renderHotspotAnswer(q, answer) {
+        let html = `<div class="hotspot-answer">`;
+        html += `<div class="dragdrop-title">✅ Correct Answer: ${answer.title}</div>`;
+
+        if (answer.type === 'yesno') {
+            html += `<table class="hotspot-table">
+                <thead><tr><th>Statement</th><th>Answer</th></tr></thead><tbody>`;
+            answer.items.forEach(item => {
+                const cls = item.answer === 'Yes' ? 'hs-yes' : 'hs-no';
+                html += `<tr>
+                    <td>${item.statement}</td>
+                    <td class="${cls}"><strong>${item.answer}</strong></td>
+                </tr>
+                <tr class="hs-explanation-row"><td colspan="2">${item.explanation}</td></tr>`;
+            });
+            html += `</tbody></table>`;
+        } else if (answer.type === 'dropdown') {
+            html += `<div class="hotspot-dropdowns">`;
+            answer.items.forEach(item => {
+                html += `<div class="hotspot-item">
+                    <div class="hotspot-statement">${item.statement}</div>
+                    <div class="hotspot-selected">→ ${item.answer}</div>
+                    <div class="hotspot-explanation">${item.explanation}</div>
+                </div>`;
+            });
+            html += `</div>`;
+        } else if (answer.type === 'table') {
+            html += `<div class="hotspot-dropdowns">`;
+            answer.items.forEach(item => {
+                html += `<div class="hotspot-item">
+                    <div class="hotspot-statement">${item.statement}</div>
+                    <div class="hotspot-selected">→ ${item.answer}</div>
+                    <div class="hotspot-explanation">${item.explanation}</div>
+                </div>`;
             });
             html += `</div>`;
         }
