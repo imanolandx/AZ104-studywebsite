@@ -339,6 +339,10 @@ const app = {
         const specific = this.getSpecificExplanation(question, optLower, optText, isCorrect, q);
         if (specific) return specific;
 
+        // Try cmdlet/command dictionary lookup
+        const cmdletExplanation = this.explainCmdlet(optText, optLower, isCorrect, q);
+        if (cmdletExplanation) return cmdletExplanation;
+
         // Fallback: analyze option keywords to provide technical context
         const techExplanation = this.getTechExplanation(optLower, isCorrect, question);
         if (techExplanation) return techExplanation;
@@ -952,6 +956,244 @@ const app = {
         }
 
         return result;
+    },
+
+    // Comprehensive Azure cmdlet/command dictionary
+    cmdletDB: {
+        // === VM / COMPUTE ===
+        'add-azvm': 'Adds a VM to an existing configuration (e.g., a recovery plan). Does NOT create a new VM. For creating VMs use New-AzVM.',
+        'new-azvm': 'Creates a new Azure Virtual Machine. Requires parameters: -ResourceGroupName, -Name, -Location, -Image, -Size, -Credential.',
+        'set-azvm': 'Modifies properties of an existing VM (e.g., generalize, mark as deallocated). Use Update-AzVM for configuration changes.',
+        'update-azvm': 'Applies configuration changes to a VM (after modifying the VM object in memory with Set-AzVMOSDisk, etc.).',
+        'stop-azvm': 'Stops (deallocates) a running VM. Use -StayProvisioned to keep the VM allocated (still billed for compute). Without it, VM is fully deallocated (no compute billing).',
+        'start-azvm': 'Starts a stopped/deallocated VM.',
+        'restart-azvm': 'Restarts a running VM (equivalent to reboot).',
+        'remove-azvm': 'Deletes a VM. Does NOT delete associated resources (disks, NICs, public IPs) unless explicitly specified.',
+        'get-azvm': 'Retrieves VM properties and status. Use -Status flag to get power state (running, stopped, deallocated).',
+        'new-azvmconfig': 'Creates a VM configuration object in memory. Used as the first step before piping to Set-AzVMOperatingSystem, Set-AzVMSourceImage, etc.',
+        'set-azvmoperatingsystem': 'Configures OS properties (Windows/Linux, computer name, credentials) on a VM config object.',
+        'set-azvmsourceimage': 'Sets the marketplace image reference (Publisher, Offer, SKU, Version) on a VM config object.',
+        'add-azvmnetworkinterface': 'Attaches a NIC to a VM config object.',
+        'set-azvmosdisk': 'Configures the OS disk (name, create option, managed disk ID) on a VM config object.',
+        
+        // === VHD / IMAGES ===
+        'add-azvhd': 'Uploads a local VHD file to an Azure managed disk or page blob. Used to bring on-premises VM disks into Azure. This is for VHD upload, not VM creation.',
+        'save-azvhd': 'Downloads a VHD from Azure to local storage.',
+        'add-azimage': 'Does not exist as a standard cmdlet. Use New-AzImage to create a managed image from a generalized VM or VHD.',
+        'new-azimage': 'Creates a custom managed image from a generalized/captured VM. The image can then be used to create multiple VMs.',
+        'new-azimagegallery': 'Creates a Shared Image Gallery for organizing and sharing VM images across subscriptions/regions.',
+        'add-azimagedatadisk': 'Adds a data disk configuration to an image object (New-AzImageConfig). Used when creating images that include additional data disks.',
+        
+        // === DISKS ===
+        'new-azdisk': 'Creates a new managed disk (empty, from snapshot, from VHD, or from another disk).',
+        'new-azdiskconfig': 'Creates a disk configuration object with specified properties (size, SKU, source).',
+        'add-azvmdatadisk': 'Attaches a data disk to an existing VM. Parameters: -VM, -Name, -CreateOption, -Lun, -DiskSizeGB.',
+        'remove-azvmdatadisk': 'Detaches a data disk from a VM. The disk is not deleted, just disconnected.',
+        'set-azvmdiskencryptionextension': 'Enables Azure Disk Encryption (BitLocker for Windows, DM-Crypt for Linux) on a VM using Key Vault.',
+        'new-azsnapshot': 'Creates a snapshot of a managed disk (point-in-time copy).',
+        
+        // === NETWORKING ===
+        'new-azvirtualnetwork': 'Creates a new Virtual Network with specified address space and subnets.',
+        'add-azvirtualnetworksubnetconfig': 'Adds a subnet configuration to an existing VNet object (must call Set-AzVirtualNetwork to apply).',
+        'set-azvirtualnetwork': 'Applies changes to a VNet object (after adding/modifying subnets in memory).',
+        'new-aznetworksecuritygroup': 'Creates a new NSG (empty or with rules).',
+        'new-aznetworksecurityruleconfig': 'Creates a security rule for an NSG (priority, direction, port, protocol, action).',
+        'add-aznetworksecurityruleconfig': 'Adds a new rule to an existing NSG object.',
+        'set-aznetworksecuritygroup': 'Applies changes to an NSG (after adding/modifying rules in memory).',
+        'new-azloadbalancer': 'Creates a new Azure Load Balancer (Basic or Standard SKU).',
+        'new-azpublicipaddress': 'Creates a new public IP address resource (Static or Dynamic allocation).',
+        'new-aznetworkinterface': 'Creates a new NIC associated with a subnet, NSG, and optionally a public IP.',
+        'new-azvirtualnetworkpeering': 'Creates a peering connection between two VNets.',
+        'add-azvirtualnetworkpeering': 'Adds a peering to an existing VNet.',
+        'new-azvpngateway': 'Creates a VPN Gateway for site-to-site or point-to-site VPN connectivity.',
+        'new-azfirewall': 'Creates an Azure Firewall instance in a VNet.',
+        'new-azapplicationgateway': 'Creates a Layer 7 Application Gateway (HTTP/HTTPS load balancer with WAF).',
+        'new-azroutetable': 'Creates a user-defined route table (UDR) for custom routing.',
+        'add-azrouteconfig': 'Adds a route to a route table (next hop: VNet, Internet, VirtualAppliance, None).',
+        'new-azdnszone': 'Creates an Azure DNS zone (public or private).',
+        'new-azdnsrecordset': 'Creates a DNS record set in a zone.',
+        'add-azdnsrecordconfig': 'Adds a record to a DNS record set (A, AAAA, CNAME, MX, etc.).',
+        
+        // === STORAGE ===
+        'new-azstorageaccount': 'Creates a new storage account with specified SKU (LRS, GRS, ZRS), Kind (StorageV2, BlobStorage), and access tier.',
+        'set-azstorageaccount': 'Modifies storage account properties (change access tier, redundancy, enable/disable features).',
+        'get-azstorageaccountkey': 'Retrieves the access keys for a storage account.',
+        'new-azstoragecontainer': 'Creates a blob container within a storage account.',
+        'set-azstorageblobcontent': 'Uploads a file to blob storage.',
+        'get-azstorageblobcontent': 'Downloads a blob to local storage.',
+        'new-azstorageaccountsastoken': 'Generates an account-level SAS token for the storage account.',
+        'new-azstorageblobsastoken': 'Generates a blob-level SAS token for a specific blob.',
+        'new-azstorageshare': 'Creates an Azure Files share.',
+        'set-azstorageaccount': 'Updates storage account properties (tier, replication, network rules).',
+        'new-azdatalaketransfer': 'Transfers data to/from Data Lake Storage.',
+        
+        // === IDENTITY / AZURE AD ===
+        'new-azureaduser': 'Creates a new INTERNAL (member) user in Azure AD. Cannot create guest users. Parameters: -DisplayName, -UserPrincipalName, -PasswordProfile, -AccountEnabled.',
+        'new-azureadmsinvitation': 'Sends a B2B invitation to create a GUEST (external) user. The invited user receives an email to accept. Parameters: -InvitedUserEmailAddress, -InviteRedirectUrl.',
+        'new-azureadgroup': 'Creates a new security or Microsoft 365 group. Use -GroupTypes for dynamic membership.',
+        'add-azureadgroupmember': 'Adds a user/service principal as a member to a group.',
+        'add-azureadgroupowner': 'Adds an owner to a group (owners can manage group membership).',
+        'new-azureadapplication': 'Registers a new application in Azure AD (creates an app registration).',
+        'new-azureadserviceprincipal': 'Creates a service principal for an Azure AD application (enterprise app).',
+        'set-azureaduser': 'Modifies properties of an existing Azure AD user.',
+        'remove-azureaduser': 'Deletes a user from Azure AD (soft delete, recoverable for 30 days).',
+        'get-azureaduser': 'Retrieves user properties from Azure AD. Use -Filter for queries.',
+        'new-azadserviceprincipal': 'Creates a service principal (Az module equivalent).',
+        'new-azroleassignment': 'Assigns an RBAC role to a user/group/service principal at a specified scope.',
+        'remove-azroleassignment': 'Removes an RBAC role assignment.',
+        'get-azroleassignment': 'Lists all RBAC role assignments at a specified scope.',
+        'get-azroledefinition': 'Lists available role definitions (built-in and custom).',
+        'new-azroledefinition': 'Creates a custom RBAC role definition with specific permissions.',
+        
+        // === RESOURCE MANAGEMENT ===
+        'new-azresourcegroup': 'Creates a new resource group in a specified location.',
+        'remove-azresourcegroup': 'Deletes a resource group and ALL resources within it.',
+        'move-azresource': 'Moves resources from one resource group to another (or different subscription). Does NOT change region.',
+        'new-azresourcegroupdeployment': 'Deploys an ARM template to a resource group.',
+        'new-azdeployment': 'Deploys an ARM template at subscription or management group scope.',
+        'test-azresourcegroupdeployment': 'Validates an ARM template without actually deploying it (what-if).',
+        'export-azresourcegroup': 'Exports all resources in a resource group as an ARM template JSON.',
+        'new-azresourcelock': 'Creates a lock (ReadOnly or CanNotDelete) on a resource/resource group.',
+        'remove-azresourcelock': 'Removes a resource lock.',
+        'get-azresourcelock': 'Lists all locks at a specified scope.',
+        'register-azresourceprovider': 'Registers a resource provider for use in the subscription (e.g., Microsoft.Compute, Microsoft.Storage).',
+        
+        // === POLICY ===
+        'new-azpolicyassignment': 'Assigns an Azure Policy to a scope (management group, subscription, resource group).',
+        'new-azpolicydefinition': 'Creates a custom policy definition with rules and effect.',
+        'get-azpolicyassignment': 'Lists policy assignments at a scope.',
+        'new-azpolicysetdefinition': 'Creates a policy initiative (group of policies).',
+        
+        // === BACKUP / RECOVERY ===
+        'backup-azrecoveryservicesvaultitem': 'Triggers an on-demand backup of a protected item.',
+        'enable-azrecoveryservicesbackupprotection': 'Enables backup for a resource using a specified backup policy.',
+        'get-azrecoveryservicesbackupitem': 'Gets backed up items in a vault.',
+        'restore-azrecoveryservicesbackupitem': 'Restores a backed-up item to a specified recovery point.',
+        'set-azrecoveryservicesvaultcontext': 'Sets the vault context for subsequent Recovery Services operations.',
+        'get-azrecoveryservicesbackuprecoverypoint': 'Lists available recovery points for a backup item.',
+        'new-azrecoveryservicesvault': 'Creates a new Recovery Services vault for backup/site recovery.',
+        
+        // === MONITORING ===
+        'add-azmetric alertrule': 'Creates a classic metric alert rule (deprecated, use Add-AzMetricAlertRuleV2).',
+        'add-azmetricalertrulev2': 'Creates a metric alert rule (monitors a metric and triggers action group).',
+        'set-azdiagnosticsetting': 'Configures diagnostic settings to send metrics/logs to Log Analytics, Storage, or Event Hub.',
+        'new-azactiongroup': 'Creates an action group (defines notification receivers and automation actions).',
+        'new-azactivitylogalert': 'Creates an activity log alert (triggers on Azure control plane operations).',
+        'get-azlog': 'Retrieves activity log entries.',
+        'get-azmetric': 'Retrieves metric data for a resource.',
+        
+        // === APP SERVICE ===
+        'new-azwebapp': 'Creates a new Azure Web App (App Service).',
+        'new-azappserviceplan': 'Creates an App Service Plan (defines compute resources: tier, size, region).',
+        'set-azwebapp': 'Modifies web app configuration (app settings, connection strings, runtime).',
+        'new-azwebappslot': 'Creates a deployment slot for a web app.',
+        'switch-azwebappslot': 'Swaps two deployment slots (typically staging → production).',
+        'publish-azwebapp': 'Deploys code to a web app from a ZIP package.',
+        
+        // === CONTAINERS ===
+        'new-azcontainergroup': 'Creates an Azure Container Instance (ACI) group with one or more containers.',
+        'new-azakscluster': 'Creates a new Azure Kubernetes Service (AKS) cluster.',
+        'import-azaksclustercredential': 'Downloads AKS cluster credentials to kubectl config.',
+        'set-azakscluster': 'Modifies AKS cluster properties (scaling, upgrades).',
+        
+        // === KEY VAULT ===
+        'new-azkeyvault': 'Creates a new Azure Key Vault.',
+        'set-azkeyvaultaccesspolicy': 'Sets access policy on a Key Vault (permissions for keys, secrets, certificates per identity).',
+        'set-azkeyvaultsecret': 'Stores a secret in Key Vault.',
+        'get-azkeyvaultsecret': 'Retrieves a secret from Key Vault.',
+        'add-azkeyvaultkey': 'Adds or imports a key to Key Vault.',
+        
+        // === SCALE SETS ===
+        'new-azvmss': 'Creates a VM Scale Set (group of identical auto-scaling VMs).',
+        'update-azvmss': 'Updates VMSS model (image, size, extensions). Instances need manual upgrade unless set to Automatic.',
+        'update-azvmssinstance': 'Applies the latest VMSS model to specific instances.',
+        
+        // === AZURE AD CONNECT ===
+        'start-adsyncsync cycle': 'Triggers Azure AD Connect synchronization. Use -PolicyType Delta (changes only) or Initial (full sync).',
+        'start-adsyncsync cycle -policytype delta': 'Syncs only CHANGES since last cycle. Fast (seconds). Use for immediate sync of new/modified objects.',
+        'start-adsyncsync cycle -policytype initial': 'Full re-sync of ALL objects. Slow (hours for large directories). Required after sync rule changes.',
+    },
+
+    explainCmdlet(optText, optLower, isCorrect, q) {
+        // Try to find a cmdlet name in the option
+        const cmdletMatch = optText.match(/\b([A-Z][a-z]+-Az[A-Za-z]*|[A-Z][a-z]+-AzureAD[A-Za-z]*|[A-Z][a-z]+-ADSync[A-Za-z]*|[A-Z][a-z]+-Msol[A-Za-z]*|[A-Z][a-z]+-Mg[A-Za-z]*)/);
+        if (!cmdletMatch) return null;
+
+        const cmdlet = cmdletMatch[0];
+        const cmdletKey = cmdlet.toLowerCase();
+        const correctAnswer = q.correctAnswers[0] ? q.correctAnswers[0].replace(/^[A-Z]\.\s*/, '').trim() : '';
+        
+        // Look up in dictionary
+        const description = this.cmdletDB[cmdletKey];
+        
+        if (description) {
+            if (isCorrect) {
+                return `<b>${cmdlet}</b> — ${description}<br><br>✅ This is the correct cmdlet because it performs exactly the operation required by the question.`;
+            } else {
+                // Also explain what the correct cmdlet does
+                const correctCmdletMatch = correctAnswer.match(/\b([A-Z][a-z]+-Az[A-Za-z]*|[A-Z][a-z]+-AzureAD[A-Za-z]*|[A-Z][a-z]+-ADSync[A-Za-z]*|[A-Z][a-z]+-Msol[A-Za-z]*|[A-Z][a-z]+-Mg[A-Za-z]*)/);
+                let correctInfo = '';
+                if (correctCmdletMatch) {
+                    const correctDesc = this.cmdletDB[correctCmdletMatch[0].toLowerCase()];
+                    if (correctDesc) {
+                        correctInfo = `<br><br>✅ <b>Correct: ${correctCmdletMatch[0]}</b> — ${correctDesc}`;
+                    }
+                }
+                return `<b>${cmdlet}</b> — ${description}<br><br>❌ This is NOT what the question asks for. It performs a different operation than what's required.${correctInfo}`;
+            }
+        }
+        
+        // Cmdlet found but not in dictionary — generate explanation from name pattern
+        const verb = cmdlet.split('-')[0].toLowerCase();
+        const noun = cmdlet.split('-').slice(1).join('-');
+        
+        const verbMeanings = {
+            'new': 'Creates a new resource/object',
+            'set': 'Modifies properties of an existing resource',
+            'get': 'Retrieves/reads information (read-only)',
+            'remove': 'Deletes a resource permanently',
+            'add': 'Adds an item to a collection or configuration',
+            'update': 'Applies pending changes to a resource',
+            'start': 'Starts a process or resource',
+            'stop': 'Stops a running process or resource',
+            'restart': 'Restarts a resource',
+            'move': 'Moves a resource to a different container/scope',
+            'export': 'Exports data or configuration to file',
+            'import': 'Imports data or configuration from file',
+            'enable': 'Enables a feature or protection',
+            'disable': 'Disables a feature or protection',
+            'register': 'Registers a provider or resource',
+            'unregister': 'Unregisters a provider or resource',
+            'test': 'Validates/tests without executing',
+            'invoke': 'Executes an action or command',
+            'backup': 'Creates a backup',
+            'restore': 'Restores from a backup',
+            'publish': 'Deploys/publishes content',
+            'switch': 'Swaps or switches between configurations',
+            'save': 'Saves/downloads to local storage',
+            'select': 'Selects/sets the current context',
+            'grant': 'Grants permissions or access',
+            'revoke': 'Revokes permissions or access'
+        };
+        
+        const verbDesc = verbMeanings[verb] || `Performs the "${verb}" operation`;
+        
+        if (isCorrect) {
+            return `<b>${cmdlet}</b> — ${verbDesc} for ${noun}. This cmdlet performs the exact operation needed for this scenario.`;
+        } else {
+            let correctInfo = '';
+            const correctCmdletMatch = correctAnswer.match(/\b([A-Z][a-z]+-Az[A-Za-z]*|[A-Z][a-z]+-AzureAD[A-Za-z]*)/);
+            if (correctCmdletMatch) {
+                const cVerb = correctCmdletMatch[0].split('-')[0].toLowerCase();
+                const cNoun = correctCmdletMatch[0].split('-').slice(1).join('-');
+                const cVerbDesc = verbMeanings[cVerb] || `Performs "${cVerb}"`;
+                const cDict = this.cmdletDB[correctCmdletMatch[0].toLowerCase()];
+                correctInfo = cDict 
+                    ? `<br><br>✅ <b>Correct: ${correctCmdletMatch[0]}</b> — ${cDict}`
+                    : `<br><br>✅ <b>Correct: ${correctCmdletMatch[0]}</b> — ${cVerbDesc} for ${cNoun}.`;
+            }
+            return `<b>${cmdlet}</b> — ${verbDesc} for ${noun}. This performs a different operation than what's needed here.${correctInfo}`;
+        }
     },
 
     explainFromQuestionContext(q, optText, optLower, isCorrect) {
