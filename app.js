@@ -305,7 +305,7 @@ const app = {
         const options = q.options || [];
         
         // Build per-option breakdown
-        let html = '<div class="explanation-header">Option Breakdown:</div>';
+        let html = '<div class="explanation-header">📖 Option Breakdown:</div>';
         
         if (options.length > 0) {
             options.forEach(opt => {
@@ -331,280 +331,414 @@ const app = {
 
     explainOption(q, option, isCorrect) {
         const question = q.question.toLowerCase();
-        const opt = option.toLowerCase();
-        const answer = q.correctAnswers.join(' ').toLowerCase();
-
-        // Extract the option letter and text
         const optText = option.replace(/^[A-Z]\.\s*/, '').trim();
         const optLower = optText.toLowerCase();
+        const answer = q.correctAnswers.join(' ').toLowerCase();
 
-        // === IDENTITY & ACCESS MANAGEMENT ===
-        if (question.includes('tag')) {
-            if (isCorrect) return "Tags are name-value pairs that let you categorize and organize Azure resources by department, environment, cost center, etc. They can be applied to resources, resource groups, and subscriptions without requiring resource moves.";
-            if (optLower.includes('management group')) return "Management Groups organize subscriptions for governance (policy, RBAC inheritance). They don't associate individual VMs with departments — they manage subscription-level hierarchy.";
-            if (optLower.includes('resource group')) return "Moving VMs into separate resource groups by department is possible but unnecessary and disruptive. Tags achieve the same organizational goal without restructuring resources.";
-            if (optLower.includes('settings') || optLower.includes('modify')) return "VM settings control compute/networking/disk configurations, not organizational metadata. There's no built-in 'department' setting on a VM.";
+        // Try to get a specific explanation from the knowledge base
+        const specific = this.getSpecificExplanation(question, optLower, optText, isCorrect, q);
+        if (specific) return specific;
+
+        // Fallback: analyze option keywords to provide technical context
+        const techExplanation = this.getTechExplanation(optLower, isCorrect, question);
+        if (techExplanation) return techExplanation;
+
+        // Final fallback with context
+        if (isCorrect) return this.explainCorrectAnswer(q);
+        return this.explainWhyWrong(q, optText, question);
+    },
+
+    getSpecificExplanation(question, optLower, optText, isCorrect, q) {
+        // === YES/NO questions (common in AZ-104) ===
+        if (optLower === 'yes' || optLower === 'no') {
+            if (isCorrect && optLower === 'yes') {
+                return "The proposed solution DOES satisfy all the stated requirements. The approach correctly uses the right Azure service, feature, or configuration to achieve the goal described in the scenario.";
+            }
+            if (isCorrect && optLower === 'no') {
+                return "The proposed solution does NOT meet the goal. The approach is either using the wrong service/feature, missing a required step, operating at the wrong scope, or only partially addresses what's needed.";
+            }
+            if (!isCorrect && optLower === 'yes') {
+                return "Incorrect — the proposed solution fails to meet one or more requirements. Common reasons: wrong tool for the job, insufficient permissions, wrong scope, or the feature described doesn't work the way the question implies.";
+            }
+            if (!isCorrect && optLower === 'no') {
+                return "Incorrect — the proposed solution actually DOES work. The approach described in the scenario correctly satisfies all the stated conditions and goals.";
+            }
         }
 
+        // === TAG questions ===
+        if (question.includes('tag') || (question.includes('associate') && question.includes('department'))) {
+            if (optLower.includes('tag')) {
+                return isCorrect ? 
+                    "<b>Tags</b> are metadata (name-value pairs) attached to Azure resources. They allow logical organization without moving resources. Example: Tag key='Department', value='Finance'. Tags can be enforced via Azure Policy and used in cost management for billing reports per department." :
+                    "Tags provide metadata but don't meet the specific requirement here.";
+            }
+            if (optLower.includes('management group')) {
+                return "<b>Management Groups</b> are containers ABOVE subscriptions in the Azure hierarchy. They're used for applying governance (policies, RBAC) across multiple subscriptions. They do NOT organize individual resources like VMs — they operate at the subscription level only.";
+            }
+            if (optLower.includes('resource group')) {
+                return "<b>Resource Groups</b> are logical containers for Azure resources. While you COULD create one per department, this forces moving all VMs to new resource groups (disruptive), and resources can only belong to ONE resource group. Tags are simpler for categorization.";
+            }
+            if (optLower.includes('modify') || optLower.includes('settings')) {
+                return "<b>VM Settings</b> control compute configurations (size, disks, networking, extensions). There is no built-in 'department' field in VM settings. For organizational metadata, Azure Tags are the designed solution.";
+            }
+        }
+
+        // === CONDITIONAL ACCESS ===
         if (question.includes('conditional access')) {
-            if (optLower.includes('multi-factor authentication page') || optLower.includes('user settings')) {
-                if (isCorrect) return "This is the correct approach for the given scenario.";
-                return "The MFA user settings page enables/disables MFA per user but cannot enforce device requirements or location-based conditions. Conditional Access policies are needed for combining multiple conditions.";
+            if (optLower.includes('multi-factor authentication') || optLower.includes('user settings') || optLower.includes('mfa')) {
+                return isCorrect ?
+                    "<b>MFA user settings</b> allow per-user MFA configuration. In this context, it satisfies the requirement." :
+                    "<b>MFA user settings page</b> (Security > MFA > User settings) only toggles MFA on/off per user. It CANNOT: (1) enforce device requirements, (2) evaluate location conditions, (3) combine multiple conditions. For conditional requirements (location + device + MFA together), you need a Conditional Access policy.";
             }
             if (optLower.includes('session control')) {
-                if (isCorrect) return "This is the correct approach for the given scenario.";
-                return "Session controls manage what happens AFTER sign-in (e.g., app-enforced restrictions, sign-in frequency). They don't enforce authentication requirements like MFA or device compliance at sign-in time.";
+                return isCorrect ?
+                    "<b>Session controls</b> in Conditional Access manage post-authentication behavior and satisfy this requirement." :
+                    "<b>Session controls</b> manage what happens AFTER successful sign-in: sign-in frequency, persistent browser sessions, app-enforced restrictions. They do NOT control authentication requirements (MFA, device compliance) — those are configured in <b>Grant controls</b>.";
             }
-            if (optLower.includes('grant control') || optLower.includes('conditional access')) {
-                if (isCorrect) return "Conditional Access grant controls let you require MFA AND compliant/Azure AD-joined devices simultaneously, with conditions for location (trusted/untrusted). This combines all the requirements in one policy.";
-                return "This approach addresses part of the requirement but may not fully satisfy all conditions specified.";
-            }
-        }
-
-        if (question.includes('ad connect') || question.includes('adsync') || question.includes('dirsync') || question.includes('sync')) {
-            if (optLower.includes('delta')) {
-                if (isCorrect) return "Delta sync (Start-ADSyncSyncCycle -PolicyType Delta) processes only changes since the last cycle. It's the fastest way to push a newly created user to Azure AD immediately without waiting for the 30-minute automatic cycle.";
-                return "Delta sync handles changes but may not be what's needed in this specific scenario.";
-            }
-            if (optLower.includes('initial') || optLower.includes('full')) {
-                if (isCorrect) return "An initial/full sync is required in this scenario to process all objects correctly.";
-                return "A full/initial sync reprocesses ALL objects, which is slow and unnecessary when you only need to sync a single new user. Delta sync is more efficient for individual changes.";
-            }
-            if (optLower.includes('sites and services') || optLower.includes('active directory sites')) {
-                return "Active Directory Sites and Services manages on-premises AD replication between domain controllers, not Azure AD Connect synchronization. It has no effect on cloud sync.";
-            }
-            if (optLower.includes('netlogon') || optLower.includes('restart')) {
-                return "Restarting the NetLogon service handles domain authentication and DC locator, not Azure AD sync. It's irrelevant to Azure AD Connect operations.";
+            if (optLower.includes('grant control') || optLower.includes('conditional access policy')) {
+                return isCorrect ?
+                    "<b>Conditional Access Grant controls</b> are the correct mechanism. They allow combining conditions (Who: Global Admins, Where: untrusted locations) with requirements (Grant: Require MFA + Require Azure AD-joined device). This is the ONLY way to enforce all three conditions simultaneously." :
+                    "Conditional Access grant controls can combine conditions but may not be the exact approach needed here.";
             }
         }
 
-        if (question.includes('rbac') || question.includes('role-based') || (question.includes('role') && question.includes('assign'))) {
-            if (optLower.includes('owner')) {
-                if (isCorrect) return "The Owner role grants full access to all resources including the ability to assign roles to others via RBAC. It's the most privileged built-in role.";
-                return "Owner is too permissive for this scenario — it grants full access including role assignment, which violates the principle of least privilege.";
+        // === GPO / SCRIPTS ===
+        if (optLower.includes('group policy') || optLower.includes('gpo')) {
+            if (optLower.includes('startup script')) {
+                return isCorrect ?
+                    "<b>GPO Startup Scripts</b> run during computer startup (before user login) under the SYSTEM context. They execute every time the machine boots. Path: Computer Configuration > Policies > Windows Settings > Scripts > Startup. Ideal for: machine-level configurations, deploying agents, running setup tasks that must complete before users interact with the system." :
+                    "<b>GPO Startup Scripts</b> run at boot time under SYSTEM context. While GPO is the right tool, startup scripts run before login. Consider whether the timing (startup vs. logon) matches what's required — startup = machine boot, logon = user signs in.";
             }
-            if (optLower.includes('contributor')) {
-                if (isCorrect) return "Contributor grants full access to manage all resources but cannot assign roles or manage access in Azure RBAC. It's appropriate when resource management is needed without access management.";
-                return "Contributor can manage resources but CANNOT assign roles to others. If role assignment is needed, a different role like Owner or User Access Administrator is required.";
+            if (optLower.includes('logon script')) {
+                return isCorrect ?
+                    "<b>GPO Logon Scripts</b> run when a user logs in, executing in the user's security context. Ideal for per-user configurations like drive mappings or printer connections." :
+                    "<b>GPO Logon Scripts</b> run when a USER logs in (not at machine boot). They execute in the user's context, not SYSTEM. Key difference: Logon scripts are user-triggered and run per-login. If the requirement needs something to run at MACHINE startup (before any user logs in), logon scripts are wrong — use Startup Scripts instead.";
             }
-            if (optLower.includes('reader')) {
-                if (isCorrect) return "Reader allows viewing all resources but cannot make any changes. Appropriate for audit/monitoring scenarios.";
-                return "Reader is read-only and cannot create, modify, or delete any resources. It's insufficient when management actions are required.";
+            if (!optLower.includes('startup') && !optLower.includes('logon')) {
+                return isCorrect ?
+                    "<b>Group Policy Objects (GPO)</b> allow centralized management of computer and user settings across Active Directory domains. GPOs can deploy scripts, configure security, install software, and enforce settings." :
+                    "<b>Group Policy Objects (GPO)</b> are domain management tools. Depending on whether the scripts need to run at startup or logon, you must configure the correct policy node.";
             }
-            if (optLower.includes('user access administrator')) {
-                if (isCorrect) return "User Access Administrator can manage user access to Azure resources (assign roles) without managing the resources themselves.";
-                return "User Access Administrator only manages role assignments, not resource operations. It doesn't grant the ability to create or modify resources.";
+        }
+
+        // === SETUPCOMPLETE.CMD ===
+        if (optLower.includes('setupcomplete.cmd') || optLower.includes('setupcomplete')) {
+            return isCorrect ?
+                "<b>SetupComplete.cmd</b> is a special Windows batch file that runs ONCE after Windows Setup (OOBE) completes. Located at %WINDIR%\\Setup\\Scripts\\SetupComplete.cmd. It only executes during initial OS deployment/sysprep — it does NOT run on subsequent boots." :
+                "<b>SetupComplete.cmd</b> (%WINDIR%\\Setup\\Scripts\\) is a one-time post-setup script that runs ONLY after Windows initial installation or sysprep completes. It does NOT run on regular reboots or subsequent startups. For recurring execution on every boot, this is the wrong mechanism — GPO Startup Scripts or Scheduled Tasks are needed instead.";
+        }
+
+        // === VHD ===
+        if (optLower.includes('virtual hard disk') || optLower.includes('vhd')) {
+            return isCorrect ?
+                "<b>Virtual Hard Disk (VHD)</b> is used here to distribute or store the scripts. This is the correct approach for this scenario." :
+                "<b>Virtual Hard Disk (VHD)</b> is a disk image format used by Hyper-V and Azure VMs. Simply placing scripts IN a VHD does not automatically execute them. A VHD is just storage — there's no built-in mechanism to run scripts placed inside it without additional configuration (mount + scheduled task/GPO).";
+        }
+
+        // === AZURE AD CONNECT / SYNC ===
+        if (question.includes('ad connect') || question.includes('adsync') || question.includes('sync') || question.includes('dirsync')) {
+            if (optLower.includes('start-adsyncsync') || optLower.includes('delta')) {
+                return isCorrect ?
+                    "<b>Start-ADSyncSyncCycle -PolicyType Delta</b> triggers an immediate delta synchronization. Delta sync only processes CHANGES since the last sync (new/modified/deleted objects). It takes seconds to minutes vs. hours for a full sync. The default auto-sync runs every 30 minutes." :
+                    "<b>Delta sync</b> processes only changes. While efficient, it may not be the right approach if the scenario requires a full object recalculation.";
             }
+            if (optLower.includes('initial') || optLower.includes('full sync')) {
+                return isCorrect ?
+                    "<b>Full/Initial sync</b> reprocesses ALL objects from scratch. Required when sync rules are changed or attribute mappings are modified." :
+                    "<b>Full/Initial sync</b> (Start-ADSyncSyncCycle -PolicyType Initial) reprocesses ALL objects in the directory. This takes hours for large directories (thousands of objects). For syncing a single new user immediately, a Delta sync is far more efficient — it only processes the change.";
+            }
+            if (optLower.includes('sites and services')) {
+                return "<b>Active Directory Sites and Services</b> (dssite.msc) manages INTER-DC replication topology: site links, replication schedules between domain controllers. It has ZERO effect on Azure AD Connect synchronization. AD Connect uses its own scheduler independent of AD replication.";
+            }
+            if (optLower.includes('netlogon')) {
+                return "<b>NetLogon service</b> handles domain authentication, secure channel maintenance, and DC locator (finding domain controllers). Restarting it does NOT trigger Azure AD sync — it only affects local domain authentication. Completely unrelated to Azure AD Connect.";
+            }
+        }
+
+        // === POWERSHELL COMMANDS ===
+        if (optLower.includes('new-azvm') || optLower.includes('new-azurermvm')) {
+            return isCorrect ?
+                "<b>New-AzVM</b> creates a new Azure virtual machine via PowerShell. Parameters include -ResourceGroupName, -Name, -Location, -Image, -Size, -Credential. It provisions compute, OS disk, and NIC automatically." :
+                "<b>New-AzVM</b> creates virtual machines but doesn't address the specific requirement in this scenario.";
+        }
+        if (optLower.includes('set-az') || optLower.includes('update-az')) {
+            const cmdlet = optText.match(/\b(Set-Az\w+|Update-Az\w+)/i);
+            if (cmdlet) {
+                return isCorrect ?
+                    `<b>${cmdlet[0]}</b> modifies an existing Azure resource's configuration. This is the correct cmdlet to update the property/setting required in this scenario.` :
+                    `<b>${cmdlet[0]}</b> modifies an existing resource but either targets the wrong resource type, wrong property, or operates at the wrong scope for this requirement.`;
+            }
+        }
+        if (optLower.includes('get-az')) {
+            const cmdlet = optText.match(/\b(Get-Az\w+)/i);
+            if (cmdlet) {
+                return isCorrect ?
+                    `<b>${cmdlet[0]}</b> retrieves information about the specified Azure resource. This read operation provides the data needed for this scenario.` :
+                    `<b>${cmdlet[0]}</b> is a read/query cmdlet — it only RETRIEVES information, it doesn't CREATE or MODIFY resources. If the question requires making changes, a Set-/New-/Update- cmdlet is needed.`;
+            }
+        }
+        if (optLower.includes('remove-az')) {
+            const cmdlet = optText.match(/\b(Remove-Az\w+)/i);
+            if (cmdlet) {
+                return isCorrect ?
+                    `<b>${cmdlet[0]}</b> deletes the specified Azure resource. This is the correct operation for the removal scenario described.` :
+                    `<b>${cmdlet[0]}</b> DELETES resources permanently. If the requirement is to modify, configure, or create — not destroy — this is the wrong verb.`;
+            }
+        }
+
+        // === RBAC ROLES ===
+        if (optLower.includes('owner') && (question.includes('role') || question.includes('rbac') || question.includes('permission') || question.includes('access'))) {
+            return isCorrect ?
+                "<b>Owner role</b> provides FULL access: read, write, delete ALL resources + ability to assign roles to others (delegate access). Scope: can be assigned at management group, subscription, resource group, or resource level. Inherits downward." :
+                "<b>Owner role</b> grants EVERYTHING including role assignment (RBAC management). This violates least-privilege if the user only needs to manage resources (use Contributor) or only needs to assign roles (use User Access Administrator).";
+        }
+        if (optLower.includes('contributor') && (question.includes('role') || question.includes('rbac') || question.includes('permission') || question.includes('access'))) {
+            return isCorrect ?
+                "<b>Contributor role</b> can create, modify, and delete ALL resource types. It CANNOT: assign roles, manage access, or create/modify policy assignments. Ideal for developers/admins who need full resource management without granting access to others." :
+                "<b>Contributor role</b> manages resources but CANNOT assign roles or manage RBAC. If the requirement involves granting access to other users, Contributor is insufficient — Owner or User Access Administrator is needed.";
+        }
+        if (optLower.includes('reader') && (question.includes('role') || question.includes('rbac') || question.includes('permission') || question.includes('access'))) {
+            return isCorrect ?
+                "<b>Reader role</b> provides read-only access to view all resources. Cannot create, modify, delete, or manage access. Ideal for auditors, monitoring teams, or stakeholders who need visibility without change capability." :
+                "<b>Reader role</b> is purely read-only — it cannot create, update, delete, or manage any resource. If the task requires ANY write operation (deployment, configuration, deletion), Reader is insufficient.";
         }
 
         // === STORAGE ===
-        if (question.includes('redundancy') || question.includes('geo-redundant') || question.includes('ra-grs') || question.includes('replication')) {
-            if (optLower.includes('ra-grs') || optLower.includes('read-access geo')) {
-                if (isCorrect) return "RA-GRS replicates data to a secondary region AND allows read access from that secondary. This provides both disaster recovery and read availability from the secondary endpoint.";
-                return "RA-GRS provides maximum redundancy with secondary read access, but may exceed the requirements or cost constraints of this scenario.";
-            }
-            if (optLower.includes('lrs') || optLower.includes('locally-redundant')) {
-                if (isCorrect) return "LRS stores 3 copies within a single datacenter. It's the lowest cost option and suitable when cross-region redundancy isn't required.";
-                return "LRS only replicates within a single datacenter. It doesn't protect against datacenter-level or regional failures — inadequate for geo-redundancy requirements.";
-            }
-            if (optLower.includes('grs') && !optLower.includes('ra-grs') && !optLower.includes('read-access')) {
-                if (isCorrect) return "GRS replicates to a secondary region for disaster recovery, but read access to secondary is only available after Microsoft initiates a failover.";
-                return "Standard GRS replicates to a secondary region but doesn't allow read access until a failover occurs. If read access from the secondary is needed, RA-GRS is required.";
-            }
-            if (optLower.includes('zrs') || optLower.includes('zone-redundant')) {
-                if (isCorrect) return "ZRS replicates across 3 availability zones within a single region, protecting against zone-level failures while keeping data in-region.";
-                return "ZRS provides high availability within a single region across availability zones, but doesn't replicate to a secondary geographic region for disaster recovery.";
-            }
-        }
-
-        if (question.includes('access tier') || question.includes('blob') && question.includes('tier')) {
-            if (optLower.includes('hot')) {
-                if (isCorrect) return "Hot tier is optimized for frequently accessed data. Highest storage cost but lowest access cost.";
-                return "Hot tier has the highest storage costs. It's not cost-effective for data accessed infrequently (30+ days between accesses).";
-            }
-            if (optLower.includes('cool')) {
-                if (isCorrect) return "Cool tier is optimized for data stored at least 30 days. Lower storage cost than Hot, higher access cost. Good for short-term backup and older data.";
-                return "Cool tier requires a minimum 30-day retention. Data deleted before 30 days incurs early deletion charges.";
-            }
-            if (optLower.includes('archive')) {
-                if (isCorrect) return "Archive tier has the lowest storage cost but data is offline. Retrieval requires rehydration (hours to days). Ideal for long-term retention with rare access.";
-                return "Archive tier stores data offline — it cannot be read or modified until rehydrated to Hot or Cool tier, which takes hours. Not suitable for data needing immediate access.";
-            }
-        }
-
-        // === COMPUTE ===
-        if (question.includes('availability set')) {
-            if (optLower.includes('stop') || optLower.includes('deallocate')) {
-                if (isCorrect) return "All VMs in an availability set share the same hardware cluster. To resize, you must deallocate ALL VMs so Azure can reallocate them to a cluster that supports the new size.";
-                return "Stopping VMs releases compute resources but may not address the specific requirement in this scenario.";
-            }
-            if (optLower.includes('fault domain')) {
-                if (isCorrect) return "Fault domains protect against hardware failures (shared power/network). Setting this correctly ensures VMs are distributed across physical racks.";
-                return "Fault domains handle hardware failure isolation, not the resize allocation issue. The cluster constraint requires deallocation.";
-            }
-        }
-
-        if (question.includes('arm template') || question.includes('azure resource manager')) {
-            if (optLower.includes('resource group') && (optLower.includes('deployment') || question.includes('review'))) {
-                if (isCorrect) return "ARM deployments are tracked per Resource Group. The Deployments blade shows full history including the template JSON, parameters, inputs, and outputs for each deployment.";
-                return "While resource groups track deployments, this option may not fully address the specific requirement.";
-            }
-            if (optLower.includes('key vault') || optLower.includes('secret')) {
-                if (isCorrect) return "Key Vault references in ARM templates allow you to pass secrets securely as parameters without storing them in plain text in template files or parameter files.";
-                return "Key Vault stores secrets but doesn't directly solve the template review/deployment tracking question.";
-            }
-        }
-
-        if (question.includes('app service') || question.includes('web app')) {
-            if (optLower.includes('deployment slot')) {
-                if (isCorrect) return "Deployment slots (Standard tier+) allow deploying to a staging environment and swapping to production with zero downtime. Slot settings can be made 'sticky' to stay with the slot.";
-                return "Deployment slots require Standard tier or above. They're for zero-downtime deployments, not for the specific requirement in this scenario.";
-            }
-            if (optLower.includes('scale')) {
-                if (isCorrect) return "Auto-scale allows you to automatically adjust the number of instances based on metrics like CPU percentage, memory, or custom metrics.";
-                return "Scaling adjusts capacity but doesn't address the specific deployment or configuration requirement.";
+        if (optLower.includes('storage account') || optLower.includes('blob') || optLower.includes('file share')) {
+            if (question.includes('redundancy') || question.includes('replication')) {
+                if (optLower.includes('lrs')) return isCorrect ? "<b>LRS (Locally Redundant Storage)</b> maintains 3 synchronous copies within a SINGLE datacenter. Cheapest option. Protects against drive/rack failures but NOT datacenter or regional outages. 11 nines durability." : "<b>LRS</b> keeps all 3 copies in ONE datacenter. If the datacenter fails, ALL copies are lost. Doesn't meet geo-redundancy requirements.";
+                if (optLower.includes('zrs')) return isCorrect ? "<b>ZRS (Zone-Redundant Storage)</b> replicates synchronously across 3 availability zones in one region. Protects against single-zone failures. 12 nines durability." : "<b>ZRS</b> stays within ONE region (across zones). It doesn't replicate to another geographic region — inadequate if geo-disaster recovery is required.";
+                if (optLower.includes('grs') && !optLower.includes('ra-')) return isCorrect ? "<b>GRS (Geo-Redundant Storage)</b> replicates asynchronously to a paired region 100+ miles away. Secondary is NOT readable until Microsoft initiates failover. 16 nines durability." : "<b>GRS</b> replicates to secondary region but you CANNOT read from it until failover. If read-access from secondary is needed, use RA-GRS instead.";
+                if (optLower.includes('ra-grs')) return isCorrect ? "<b>RA-GRS (Read-Access Geo-Redundant Storage)</b> same as GRS but secondary endpoint is always readable (read-only). Use -secondary suffix on account URL. Enables high-availability reads across regions." : "<b>RA-GRS</b> provides maximum redundancy + secondary reads. May be overkill/expensive if only local redundancy is needed.";
             }
         }
 
         // === NETWORKING ===
-        if (question.includes('peering') || question.includes('virtual network') && question.includes('connect')) {
-            if (optLower.includes('peering')) {
-                if (isCorrect) return "VNet peering provides low-latency, high-bandwidth connectivity using Azure's backbone. It's non-transitive: peered VNets can communicate, but their peers cannot without direct peering.";
-                return "Peering connects VNets but is non-transitive. Traffic doesn't flow through a peered network to reach a third network without additional configuration.";
-            }
-            if (optLower.includes('gateway') || optLower.includes('vpn')) {
-                if (isCorrect) return "A VPN gateway enables encrypted tunnel connectivity between networks, useful for cross-region or hybrid scenarios.";
-                return "VPN gateways add complexity and latency. For VNet-to-VNet within Azure, peering is simpler and provides better performance without encryption overhead.";
-            }
+        if (optLower.includes('peering') || optLower.includes('vnet peering')) {
+            return isCorrect ?
+                "<b>VNet Peering</b> connects two Azure Virtual Networks directly through Microsoft's backbone (not internet). Low latency, high bandwidth. Key facts: (1) Non-transitive, (2) Works cross-region (Global VNet Peering), (3) Resources communicate via private IPs, (4) No gateways needed." :
+                "<b>VNet Peering</b> provides direct VNet-to-VNet connectivity but is non-transitive (A↔B and B↔C does NOT mean A↔C). Consider if transitivity, encryption, or on-premises connectivity is needed — those require VPN Gateway or other solutions.";
+        }
+        if (optLower.includes('network security group') || (optLower.includes('nsg') && !optLower.includes('message'))) {
+            return isCorrect ?
+                "<b>NSG (Network Security Group)</b> contains inbound/outbound security rules evaluated by priority (100-4096, lower=first). Stateful: if inbound allowed, return traffic auto-allowed. Can attach to subnet or NIC. Default rules: allow VNet-to-VNet, allow Azure LB, deny all other inbound." :
+                "<b>NSG</b> filters network traffic but may not address the specific networking requirement here. NSGs work at L3/L4 (IP, port, protocol) — they don't inspect L7 (application layer content).";
         }
 
-        if (question.includes('nsg') || question.includes('network security group')) {
-            if (optLower.includes('priority') || optLower.includes('rule')) {
-                if (isCorrect) return "NSG rules are evaluated by priority (lower number = higher priority, range 100-4096). The first matching rule wins. Both inbound and outbound rules are processed independently.";
-                return "NSG rule priority determines evaluation order. A lower priority number means the rule is evaluated earlier and takes precedence.";
-            }
-            if (optLower.includes('subnet') || optLower.includes('nic')) {
-                if (isCorrect) return "NSGs can be associated to subnets (affects all resources in the subnet) or NICs (affects only that specific VM). Both can be applied simultaneously — traffic must pass both.";
-                return "While NSGs can be attached here, the specific association doesn't address the requirement in this question.";
-            }
+        // === AZURE POLICY ===
+        if (optLower.includes('azure policy') || (optLower.includes('policy') && (question.includes('governance') || question.includes('compliance') || question.includes('enforce')))) {
+            if (optLower.includes('deny')) return isCorrect ? "<b>Azure Policy - Deny effect:</b> Blocks resource creation/modification that violates the rule in real-time. The deployment fails with a policy violation error. Use for hard enforcement of standards." : "<b>Deny</b> prevents future non-compliant resources but doesn't remediate existing ones. Also doesn't work for all resource types during updates.";
+            if (optLower.includes('audit')) return isCorrect ? "<b>Azure Policy - Audit effect:</b> Logs a warning in the Activity Log and marks the resource as non-compliant in the compliance dashboard. Does NOT block or modify anything — pure visibility." : "<b>Audit</b> only reports — it doesn't prevent or fix non-compliance. If enforcement is needed, Deny or Modify/DeployIfNotExists is required.";
+            if (optLower.includes('deployifnotexists')) return isCorrect ? "<b>Azure Policy - DeployIfNotExists:</b> Evaluates if a related resource exists (e.g., diagnostic settings). If not, automatically deploys it using an ARM template. Runs on create/update of the target resource. Requires managed identity." : "<b>DeployIfNotExists</b> auto-deploys related resources but doesn't deny the original deployment or modify the resource itself.";
+            if (optLower.includes('modify')) return isCorrect ? "<b>Azure Policy - Modify effect:</b> Adds, updates, or removes properties/tags on a resource during create/update. Requires managed identity. Great for auto-tagging or enforcing property values." : "<b>Modify</b> changes properties on the resource but cannot deploy separate related resources or deny the operation entirely.";
         }
 
-        if (question.includes('load balancer')) {
-            if (optLower.includes('standard')) {
-                if (isCorrect) return "Standard Load Balancer provides zone redundancy, SLA guarantee, supports availability zones, and allows cross-VNet backend pools. Required for production workloads.";
-                return "Standard SKU has more features but also different defaults (closed by default via NSG). Consider if the basic requirements need Standard capabilities.";
-            }
-            if (optLower.includes('basic')) {
-                if (isCorrect) return "Basic Load Balancer is suitable for small-scale testing with limited features (no SLA, no zone redundancy, open by default).";
-                return "Basic Load Balancer lacks SLA, zone redundancy, and will be retired. It's not recommended for production workloads.";
-            }
-            if (optLower.includes('health probe')) {
-                if (isCorrect) return "Health probes determine backend availability. If a probe fails, the load balancer stops sending traffic to that instance until it recovers.";
-                return "Health probes monitor backend health but don't address the specific configuration needed here.";
-            }
+        // === BACKUP ===
+        if (optLower.includes('recovery services vault') || optLower.includes('backup vault')) {
+            return isCorrect ?
+                "<b>Recovery Services Vault</b> is the storage entity for backup data. Key requirements: (1) Must be in SAME region as protected resource, (2) One vault can protect multiple resources, (3) Supports: Azure VMs, SQL in VMs, Azure Files, SAP HANA. Backup data is encrypted at rest." :
+                "<b>Recovery Services Vault</b> stores backups but by itself doesn't configure what to back up or when. You also need a backup policy (schedule + retention) and must register the resource.";
         }
 
-        if (question.includes('vpn') || question.includes('expressroute')) {
-            if (optLower.includes('expressroute')) {
-                if (isCorrect) return "ExpressRoute provides private, dedicated connectivity to Azure through a connectivity provider — not over the public internet. Offers predictable performance, lower latency, and higher security.";
-                return "ExpressRoute requires a connectivity provider and is more expensive. It's overkill if encrypted internet connectivity (VPN) meets the requirements.";
-            }
-            if (optLower.includes('site-to-site') || optLower.includes('s2s')) {
-                if (isCorrect) return "Site-to-Site VPN creates an encrypted IPsec tunnel between on-premises and Azure over the public internet. Requires a VPN device on-premises.";
-                return "S2S VPN goes over public internet with encryption. For dedicated private connectivity without internet traversal, ExpressRoute is needed.";
-            }
-            if (optLower.includes('point-to-site') || optLower.includes('p2s')) {
-                if (isCorrect) return "Point-to-Site VPN connects individual client computers to Azure VNet. Ideal for remote workers without requiring a VPN device.";
-                return "P2S VPN is for individual clients, not site-to-site connectivity. It doesn't connect an entire on-premises network.";
-            }
+        // === AZURE MONITOR ===
+        if (optLower.includes('log analytics') || optLower.includes('workspace')) {
+            return isCorrect ?
+                "<b>Log Analytics Workspace</b> is the central repository for Azure Monitor Logs. It stores log data from multiple sources (Azure resources, on-prem, other clouds). Query using KQL (Kusto Query Language). Data retention: 30 days free, up to 730 days paid." :
+                "<b>Log Analytics Workspace</b> stores and queries log data but doesn't directly trigger alerts or actions. You need Alert Rules (on top of workspace queries) for notifications.";
+        }
+        if (optLower.includes('application insights')) {
+            return isCorrect ?
+                "<b>Application Insights</b> is an APM (Application Performance Management) service for web apps. Monitors: request rates, response times, exceptions, page views, dependency tracking. Supports .NET, Java, Node.js, Python." :
+                "<b>Application Insights</b> monitors application-level performance (code/requests/exceptions). It doesn't monitor infrastructure-level metrics like VM CPU or disk. For VM monitoring, use Azure Monitor metrics or VM Insights.";
         }
 
-        if (question.includes('dns')) {
-            if (optLower.includes('private') && optLower.includes('zone')) {
-                if (isCorrect) return "Azure Private DNS zones provide name resolution within VNets without needing custom DNS servers. They support auto-registration of VM records.";
-                return "Private DNS zones work within VNets for internal resolution. They don't resolve for external/internet clients.";
+        // === DNS ===
+        if (optLower.includes('dns zone') || optLower.includes('dns record')) {
+            if (optLower.includes('private')) {
+                return isCorrect ?
+                    "<b>Azure Private DNS Zone</b> provides name resolution INSIDE virtual networks. Supports auto-registration of VM hostnames. No internet exposure. Link zones to VNets for resolution." :
+                    "<b>Private DNS zones</b> only resolve within linked VNets. They don't provide public internet DNS resolution. For public-facing domains, use public DNS zones.";
             }
-            if (optLower.includes('cname') || optLower.includes('alias')) {
-                if (isCorrect) return "CNAME records create an alias pointing to another domain name. Useful for pointing custom domains to Azure-managed endpoints.";
-                return "CNAME records alias to another domain but cannot be at the zone apex (@). For apex domains, use an Alias record set.";
-            }
+            if (optLower.includes('cname')) return isCorrect ? "<b>CNAME record</b> creates an alias pointing to another domain name (canonical name). Cannot coexist with other records at same name. Cannot be at zone apex (@)." : "<b>CNAME</b> aliases to another domain but has restrictions: cannot be at zone apex (@), cannot coexist with other record types at same name.";
+            if (optLower.includes('a record') || optLower.includes(' a ')) return isCorrect ? "<b>A record</b> maps a hostname directly to an IPv4 address. The most basic DNS record type." : "<b>A records</b> map to static IPs. If the underlying IP can change (Azure services), an Alias record or CNAME is more appropriate.";
+            if (optLower.includes('alias')) return isCorrect ? "<b>Alias record set</b> is Azure-specific — points to an Azure resource (Traffic Manager, CDN, Public IP, etc.) directly. Works at zone apex (@), auto-updates when resource IP changes." : "<b>Alias records</b> point to Azure resources but are Azure DNS-specific. They resolve to the resource's current IP automatically.";
         }
 
-        // === MONITORING ===
-        if (question.includes('monitor') || question.includes('alert') || question.includes('diagnostic') || question.includes('log analytics')) {
-            if (optLower.includes('action group')) {
-                if (isCorrect) return "Action groups define notification and automation responses to alerts — email, SMS, webhooks, Azure Functions, Logic Apps, ITSM. Reusable across multiple alert rules.";
-                return "Action groups handle alert responses but don't address the monitoring configuration or data collection requirement.";
-            }
-            if (optLower.includes('diagnostic setting')) {
-                if (isCorrect) return "Diagnostic settings stream platform metrics and logs to destinations: Log Analytics, Storage Account, or Event Hubs. Required to collect resource-level logs.";
-                return "Diagnostic settings collect data but are not the alert mechanism itself.";
-            }
+        // === LOAD BALANCER ===
+        if (optLower.includes('load balancer')) {
+            if (optLower.includes('standard')) return isCorrect ? "<b>Standard Load Balancer:</b> Zone-redundant, SLA-backed, supports 1000+ backend instances, cross-VNet backends. Closed by default (requires NSG). Required for Availability Zones." : "<b>Standard LB</b> is more capable but closed by default (needs NSG to allow traffic) and costs more than Basic.";
+            if (optLower.includes('basic')) return isCorrect ? "<b>Basic Load Balancer:</b> Limited scale (300 instances), no SLA, no zone support, open by default. Being retired — not for production." : "<b>Basic Load Balancer</b> is being retired. No SLA, no zone redundancy, limited to 300 backend instances. Not suitable for production workloads.";
+        }
+        if (optLower.includes('application gateway')) {
+            return isCorrect ?
+                "<b>Application Gateway</b> is a Layer 7 (HTTP/HTTPS) load balancer. Supports: URL-based routing, SSL termination, WAF (Web Application Firewall), cookie-based session affinity, WebSocket, HTTP/2." :
+                "<b>Application Gateway</b> operates at Layer 7 (HTTP/HTTPS). If the requirement is for Layer 4 (TCP/UDP) load balancing or non-HTTP protocols, Azure Load Balancer is more appropriate.";
+        }
+        if (optLower.includes('traffic manager')) {
+            return isCorrect ?
+                "<b>Traffic Manager</b> is a DNS-based global traffic distributor. Routes users to closest/healthiest endpoint. Methods: Priority, Weighted, Performance, Geographic, Multivalue, Subnet. Works across regions." :
+                "<b>Traffic Manager</b> is DNS-level routing (not a proxy). It doesn't see actual traffic or provide L4/L7 features. For in-region load balancing, use Azure LB or App Gateway.";
+        }
+        if (optLower.includes('front door')) {
+            return isCorrect ?
+                "<b>Azure Front Door</b> is a global Layer 7 load balancer + CDN + WAF. Provides: instant global failover, SSL offloading, URL rewriting, caching at edge. Operates at Microsoft's edge network." :
+                "<b>Azure Front Door</b> is global L7 with CDN/WAF. May be overkill for simple regional load balancing or L4 requirements.";
         }
 
-        if (question.includes('backup') || question.includes('recovery services')) {
-            if (optLower.includes('recovery services vault')) {
-                if (isCorrect) return "Recovery Services vault stores backup data and backup policies. Must be in the same region as the resource being protected. Supports VMs, SQL, Files, and more.";
-                return "Recovery Services vault stores backups but the vault alone doesn't address all aspects of this requirement.";
-            }
-            if (optLower.includes('policy') || optLower.includes('schedule')) {
-                if (isCorrect) return "Backup policies define the schedule (daily/weekly) and retention period (days/weeks/months/years) for backed-up data.";
-                return "Backup policies define schedules but may not be the specific configuration needed here.";
-            }
+        // === VPN / EXPRESSROUTE ===
+        if (optLower.includes('expressroute')) {
+            return isCorrect ?
+                "<b>ExpressRoute</b> provides PRIVATE dedicated connectivity to Azure via a connectivity provider (not internet). Speeds: 50Mbps to 100Gbps. Use cases: large data transfers, strict compliance, predictable latency. More expensive than VPN." :
+                "<b>ExpressRoute</b> is private and dedicated but expensive. Requires a connectivity provider contract. Overkill if encrypted internet tunnel (VPN) meets the requirements.";
+        }
+        if (optLower.includes('site-to-site') || optLower.includes('s2s vpn')) {
+            return isCorrect ?
+                "<b>Site-to-Site VPN</b> creates an IPsec/IKE encrypted tunnel between on-premises VPN device and Azure VPN Gateway over the public internet. Requires: compatible VPN device, public IP on-prem. Max ~1.25 Gbps throughput." :
+                "<b>Site-to-Site VPN</b> uses internet with encryption. Throughput limited to ~1.25Gbps. If private dedicated connectivity is required, ExpressRoute is needed instead.";
+        }
+        if (optLower.includes('point-to-site') || optLower.includes('p2s')) {
+            return isCorrect ?
+                "<b>Point-to-Site VPN</b> connects individual client computers to Azure VNet. Protocols: OpenVPN, SSTP, IKEv2. No VPN device needed — just VPN client software. Ideal for remote workers/developers." :
+                "<b>Point-to-Site VPN</b> is for individual CLIENT computers, not connecting entire networks. For connecting offices/datacenters, Site-to-Site VPN or ExpressRoute is needed.";
         }
 
-        // === GOVERNANCE ===
-        if (question.includes('policy') && (question.includes('azure') || question.includes('compliance'))) {
-            if (optLower.includes('deny')) {
-                if (isCorrect) return "The Deny effect prevents resource creation or modification that violates the policy rule. It blocks non-compliant operations in real-time.";
-                return "Deny blocks operations but doesn't remediate existing non-compliant resources. For retroactive enforcement, DeployIfNotExists or Modify may be needed.";
-            }
-            if (optLower.includes('audit')) {
-                if (isCorrect) return "Audit effect logs non-compliant resources in the activity log and marks them non-compliant, but doesn't prevent or modify them. Good for visibility.";
-                return "Audit only reports non-compliance — it doesn't prevent non-compliant deployments or fix existing resources.";
-            }
-            if (optLower.includes('deployifnotexists')) {
-                if (isCorrect) return "DeployIfNotExists evaluates the resource and deploys a related resource if the condition isn't met (e.g., auto-deploy diagnostics settings). Runs during create/update.";
-                return "DeployIfNotExists deploys related resources but doesn't deny or block the original resource creation.";
-            }
+        // === AVAILABILITY ===
+        if (optLower.includes('availability set')) {
+            return isCorrect ?
+                "<b>Availability Set</b> distributes VMs across Fault Domains (separate racks/power) and Update Domains (staggered maintenance). Provides 99.95% SLA. VMs in same set share a hardware cluster. Max 3 FDs, 20 UDs." :
+                "<b>Availability Sets</b> provide in-datacenter redundancy but not cross-zone or cross-region protection. For zone-level protection, use Availability Zones instead.";
+        }
+        if (optLower.includes('availability zone')) {
+            return isCorrect ?
+                "<b>Availability Zones</b> are physically separate datacenters within an Azure region. Each zone has independent power, cooling, networking. Provides 99.99% SLA — higher than Availability Sets (99.95%)." :
+                "<b>Availability Zones</b> provide zone-level protection but not all regions/services support them. Also doesn't protect against region-wide outages.";
+        }
+        if (optLower.includes('scale set') || optLower.includes('vmss')) {
+            return isCorrect ?
+                "<b>VM Scale Sets (VMSS)</b> deploy and manage a group of identical VMs. Support auto-scaling based on metrics or schedule. Can span Availability Zones. Ideal for stateless workloads that need to scale horizontally." :
+                "<b>VM Scale Sets</b> provide auto-scaling for identical VMs but are designed for stateless, horizontally-scalable workloads. Not suitable for unique/specialized VM configurations.";
         }
 
-        // === GENERAL FALLBACK with context-aware reasoning ===
-        if (isCorrect) {
-            return this.explainCorrectAnswer(q);
-        } else {
-            return this.explainWhyWrong(q, optText);
+        // === ARM TEMPLATES / DEPLOYMENT ===
+        if (optLower.includes('arm template') || optLower.includes('azure resource manager template')) {
+            return isCorrect ?
+                "<b>ARM Templates</b> are JSON files that define Azure infrastructure as code. Benefits: repeatable deployments, declarative syntax, dependency management, parallel deployment. Stored in Resource Group deployment history." :
+                "<b>ARM Templates</b> provide infrastructure-as-code but may not be the specific tool needed for this scenario.";
         }
+        if (optLower.includes('bicep')) {
+            return isCorrect ?
+                "<b>Bicep</b> is a domain-specific language (DSL) that transpiles to ARM template JSON. Simpler syntax than raw JSON, first-class VS Code support, modules for reuse." :
+                "<b>Bicep</b> transpiles to ARM JSON — same capabilities, cleaner syntax. But if the question asks about existing ARM template operations, Bicep may not apply.";
+        }
+
+        // === KEY VAULT ===
+        if (optLower.includes('key vault')) {
+            return isCorrect ?
+                "<b>Azure Key Vault</b> securely stores: secrets (passwords, connection strings), encryption keys, and SSL/TLS certificates. Access controlled via RBAC or vault access policies. Supports HSM-backed keys. Referenced in ARM templates to avoid plaintext secrets." :
+                "<b>Azure Key Vault</b> stores secrets/keys/certs but is for secure storage and retrieval — not for the specific operational requirement described.";
+        }
+
+        // === APP SERVICE / WEB APPS ===
+        if (optLower.includes('app service') || optLower.includes('web app')) {
+            if (optLower.includes('deployment slot')) return isCorrect ? "<b>Deployment Slots</b> (Standard tier+) allow staging deployments. Swap slots for zero-downtime releases. Slot settings can be 'sticky' (not swapped). Each slot has its own URL and can have different app settings." : "<b>Deployment Slots</b> require Standard tier or above. They're specifically for staging/swapping deployments — not for other App Service configurations.";
+            if (optLower.includes('scale')) return isCorrect ? "<b>App Service Scale</b> (Scale Up = bigger instance, Scale Out = more instances). Auto-scale rules trigger based on metrics (CPU, memory, HTTP queue) or schedule." : "<b>Scaling</b> adjusts compute capacity but doesn't address deployment or configuration requirements.";
+            return isCorrect ?
+                "<b>Azure App Service</b> is a PaaS for hosting web apps, REST APIs, mobile backends. Supports: .NET, Java, Node.js, Python, PHP. Features: custom domains, SSL, deployment slots, auto-scale." :
+                "<b>App Service</b> is a PaaS offering. Consider if the scenario requires IaaS (VM) control or PaaS simplicity.";
+        }
+
+        // === CONTAINERS ===
+        if (optLower.includes('container instance') || optLower.includes('aci')) {
+            return isCorrect ?
+                "<b>Azure Container Instances (ACI)</b> runs containers serverlessly — no VM management. Fast startup (~seconds). Supports Linux/Windows containers. Per-second billing. Ideal for: burst workloads, build agents, short-lived tasks." :
+                "<b>ACI</b> is for simple, short-lived container workloads. For complex orchestration (service discovery, auto-scaling, rolling updates), AKS is more appropriate.";
+        }
+        if (optLower.includes('kubernetes') || optLower.includes('aks')) {
+            return isCorrect ?
+                "<b>Azure Kubernetes Service (AKS)</b> is managed Kubernetes. Handles: control plane, upgrades, scaling, self-healing. You manage worker nodes. Features: RBAC integration, Azure CNI networking, pod autoscaling, cluster autoscaling." :
+                "<b>AKS</b> is a full orchestration platform — complex and expensive for simple container workloads. For single containers or batch jobs, ACI is simpler.";
+        }
+
+        return null; // No specific explanation found
+    },
+
+    getTechExplanation(optLower, isCorrect, question) {
+        // Analyze keywords in the option to provide technical context
+        const concepts = [];
+        
+        if (optLower.includes('powershell') || optLower.includes('az ')) concepts.push('PowerShell/Azure CLI command');
+        if (optLower.includes('portal')) concepts.push('Azure Portal GUI action');
+        if (optLower.includes('cli') || optLower.includes('az ')) concepts.push('Azure CLI');
+        if (optLower.includes('resource group')) concepts.push('Resource Group (logical container for related resources)');
+        if (optLower.includes('subscription')) concepts.push('Subscription (billing and access boundary)');
+        if (optLower.includes('management group')) concepts.push('Management Group (container above subscriptions for governance)');
+        if (optLower.includes('managed identity')) concepts.push('Managed Identity (auto-managed credentials for Azure-to-Azure auth)');
+        if (optLower.includes('service principal')) concepts.push('Service Principal (app identity for programmatic access)');
+        if (optLower.includes('access key')) concepts.push('Access Key (shared key for storage authentication — full access)');
+        if (optLower.includes('sas') || optLower.includes('shared access signature')) concepts.push('SAS (time-limited, permission-scoped access token)');
+        if (optLower.includes('private endpoint')) concepts.push('Private Endpoint (private IP in your VNet for Azure service)');
+        if (optLower.includes('service endpoint')) concepts.push('Service Endpoint (optimized route from VNet to Azure service, still public IP)');
+        if (optLower.includes('custom script extension')) concepts.push('Custom Script Extension (downloads and runs scripts on Azure VMs post-deploy)');
+        if (optLower.includes('desired state configuration') || optLower.includes('dsc')) concepts.push('DSC (declarative config management ensuring VMs stay in desired state)');
+        if (optLower.includes('runbook') || optLower.includes('automation account')) concepts.push('Azure Automation (scheduled/triggered scripts and runbooks)');
+        if (optLower.includes('logic app')) concepts.push('Logic App (serverless workflow with 400+ connectors)');
+        if (optLower.includes('function app') || optLower.includes('azure function')) concepts.push('Azure Function (serverless compute triggered by events)');
+        if (optLower.includes('event grid')) concepts.push('Event Grid (reactive event routing from Azure services)');
+        if (optLower.includes('event hub')) concepts.push('Event Hub (big data streaming/telemetry ingestion)');
+        if (optLower.includes('service bus')) concepts.push('Service Bus (enterprise message broker with queues/topics)');
+        if (optLower.includes('azure ad') || optLower.includes('entra')) concepts.push('Azure AD/Entra ID (cloud identity platform)');
+        if (optLower.includes('network watcher')) concepts.push('Network Watcher (network monitoring and diagnostic tools)');
+        if (optLower.includes('ip flow verify')) concepts.push('IP Flow Verify (checks if packet is allowed/denied by NSG rules)');
+        if (optLower.includes('connection monitor')) concepts.push('Connection Monitor (continuous network connectivity testing)');
+        if (optLower.includes('nsg flow log')) concepts.push('NSG Flow Logs (records all IP traffic through NSGs)');
+        if (optLower.includes('azure bastion')) concepts.push('Azure Bastion (secure RDP/SSH without public IP on VM)');
+        if (optLower.includes('just-in-time') || optLower.includes('jit')) concepts.push('JIT VM Access (time-limited, approved port opening via Defender for Cloud)');
+        
+        if (concepts.length > 0) {
+            const conceptStr = concepts.join('; ');
+            if (isCorrect) {
+                return `<b>Concepts:</b> ${conceptStr}. This is the correct approach because it uses the right tool/service that directly satisfies the specific requirement in the question.`;
+            } else {
+                return `<b>Concepts:</b> ${conceptStr}. While this is a valid Azure tool/service, it doesn't address the specific requirement. The correct answer uses a different service or approach that better fits what's being asked.`;
+            }
+        }
+        
+        return null;
     },
 
     explainCorrectAnswer(q) {
         const question = q.question.toLowerCase();
         const answer = q.correctAnswers.join(' ').toLowerCase();
         
-        if (answer.includes('yes')) return "This solution correctly satisfies all the stated requirements in the scenario.";
-        if (answer.includes('no')) return "This solution does NOT satisfy all requirements. The approach described is either incomplete, uses the wrong feature, or addresses the wrong layer of the problem.";
+        if (answer.includes('yes')) return "The proposed solution correctly satisfies ALL requirements: it uses the right service, at the right scope, with the right configuration to achieve the stated goal.";
+        if (answer.includes('no')) return "The proposed solution FAILS to meet the goal because it either: uses the wrong service/feature, operates at the wrong scope (subscription vs resource group vs resource), is missing required steps, or the described feature doesn't work the way the question implies.";
         
         const topicInfo = TOPICS[q.topic];
         if (topicInfo) {
-            return `This is correct because it directly addresses the requirement using the appropriate Azure service/feature in the ${topicInfo.name} domain. It follows Azure best practices and is the most efficient solution.`;
+            return `This is correct because it uses the appropriate Azure service/feature for the ${topicInfo.name} domain, directly addressing all requirements with the proper scope and configuration.`;
         }
-        return "This is the correct answer based on Azure documentation and best practices.";
+        return "This is the correct answer — it directly addresses all stated requirements using the proper Azure service and configuration.";
     },
 
-    explainWhyWrong(q, optText) {
+    explainWhyWrong(q, optText, question) {
         const opt = optText.toLowerCase();
-        const question = q.question.toLowerCase();
         
-        // Common wrong answer patterns
-        if (opt.includes('yes') && q.correctAnswers.some(a => a.toLowerCase().includes('no'))) {
-            return "The proposed solution does NOT meet all the goals. While it may address part of the requirement, it fails to satisfy one or more key conditions specified in the question.";
+        if (opt === 'yes' && q.correctAnswers.some(a => a.toLowerCase().includes('no'))) {
+            return "Incorrect — this solution FAILS to meet the goal. It either uses the wrong service, wrong scope, missing steps, or the feature doesn't provide the specific capability required.";
         }
-        if (opt.includes('no') && q.correctAnswers.some(a => a.toLowerCase().includes('yes'))) {
-            return "The proposed solution actually DOES meet the goals. The approach described correctly addresses all stated requirements.";
+        if (opt === 'no' && q.correctAnswers.some(a => a.toLowerCase().includes('yes'))) {
+            return "Incorrect — this solution actually DOES work. The described approach correctly uses the right Azure service/feature to achieve all stated requirements.";
         }
         
-        // Generic but helpful
-        return "This option either addresses a different problem, uses an inappropriate service/feature for the stated requirement, or doesn't fully satisfy all conditions specified in the question.";
+        // Analyze why it might be wrong based on common patterns
+        if (opt.includes('powershell') || opt.includes('cli') || opt.includes('az ')) {
+            return "This command/tool exists but either targets the wrong resource type, uses incorrect parameters, or performs the wrong operation for what's being asked.";
+        }
+        if (opt.includes('portal') || opt.includes('blade') || opt.includes('navigate')) {
+            return "This Azure Portal path exists but either leads to the wrong setting, wrong scope, or doesn't provide the specific capability needed for this requirement.";
+        }
+        
+        return "This option uses a valid Azure service/feature but it doesn't satisfy the specific requirement. It either operates at the wrong scope, targets the wrong resource type, provides different functionality, or requires additional steps not mentioned.";
     },
 
     prevQuestion() {
