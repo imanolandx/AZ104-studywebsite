@@ -289,12 +289,20 @@ const app = {
         const answerSection = document.getElementById('answer-section');
         answerSection.classList.remove('hidden');
         const explanation = this.getExplanation(q);
-        document.getElementById('answer-reveal').innerHTML = `
-            <div class="answer-correct">
-                <strong>Correct Answer:</strong> ${q.correctAnswers.join(', ')}
-            </div>
-            ${explanation}
-        `;
+        
+        // For drag-drop questions, the visualization IS the answer
+        const isDragDrop = (!q.options || q.options.length === 0) && typeof DRAGDROP_ANSWERS !== 'undefined' && DRAGDROP_ANSWERS[q.id];
+        
+        if (isDragDrop) {
+            document.getElementById('answer-reveal').innerHTML = explanation;
+        } else {
+            document.getElementById('answer-reveal').innerHTML = `
+                <div class="answer-correct">
+                    <strong>Correct Answer:</strong> ${q.correctAnswers.join(', ')}
+                </div>
+                ${explanation}
+            `;
+        }
 
         document.getElementById('btn-check').classList.add('hidden');
         document.getElementById('btn-reveal').classList.add('hidden');
@@ -318,14 +326,53 @@ const app = {
                     ${reason}
                 </div>`;
             });
+        } else if (typeof DRAGDROP_ANSWERS !== 'undefined' && DRAGDROP_ANSWERS[q.id]) {
+            // Drag-and-drop / hotspot visual answer
+            html = this.renderDragDropAnswer(q, DRAGDROP_ANSWERS[q.id]);
         } else {
-            // Image-based / no options
-            html += `<div class="option-explanation option-correct">
-                <strong>✅ ${q.correctAnswers.join(', ')}</strong>
-                ${this.explainCorrectAnswer(q)}
+            // Fallback for questions without answer data
+            html += `<div class="option-explanation" style="border-left:3px solid #ff9800;padding:12px;background:#fff8e1;">
+                <strong>⚠️ This is a drag-and-drop or image-based question.</strong><br>
+                Answer data not yet available for this question. Check Microsoft Learn for the correct answer.
             </div>`;
         }
         
+        return html;
+    },
+
+    renderDragDropAnswer(q, answer) {
+        let html = `<div class="dragdrop-answer">`;
+        html += `<div class="dragdrop-title">✅ Correct Answer: ${answer.title}</div>`;
+
+        if (answer.type === 'sequence') {
+            html += `<div class="dragdrop-sequence">`;
+            answer.steps.forEach((s, i) => {
+                html += `<div class="dragdrop-step">
+                    <div class="step-number">${s.step}</div>
+                    <div class="step-content">
+                        <div class="step-action">${s.action}</div>
+                        <div class="step-explanation">${s.explanation}</div>
+                    </div>
+                </div>`;
+                if (i < answer.steps.length - 1) {
+                    html += `<div class="step-arrow">↓</div>`;
+                }
+            });
+            html += `</div>`;
+        } else if (answer.type === 'match') {
+            html += `<div class="dragdrop-match">`;
+            answer.items.forEach(item => {
+                html += `<div class="match-row">
+                    <div class="match-target">${item.target}</div>
+                    <div class="match-arrow">→</div>
+                    <div class="match-answer">${item.answer}</div>
+                </div>
+                <div class="match-explanation">${item.explanation}</div>`;
+            });
+            html += `</div>`;
+        }
+
+        html += `</div>`;
         return html;
     },
 
