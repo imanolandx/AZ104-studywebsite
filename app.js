@@ -343,6 +343,10 @@ const app = {
         const techExplanation = this.getTechExplanation(optLower, isCorrect, question);
         if (techExplanation) return techExplanation;
 
+        // Smart fallback: analyze the QUESTION to explain why this option value is right/wrong
+        const questionContext = this.explainFromQuestionContext(q, optText, optLower, isCorrect);
+        if (questionContext) return questionContext;
+
         // Final fallback with context
         if (isCorrect) return this.explainCorrectAnswer(q);
         return this.explainWhyWrong(q, optText, question);
@@ -351,18 +355,7 @@ const app = {
     getSpecificExplanation(question, optLower, optText, isCorrect, q) {
         // === YES/NO questions (common in AZ-104) ===
         if (optLower === 'yes' || optLower === 'no') {
-            if (isCorrect && optLower === 'yes') {
-                return "The proposed solution DOES satisfy all the stated requirements. The approach correctly uses the right Azure service, feature, or configuration to achieve the goal described in the scenario.";
-            }
-            if (isCorrect && optLower === 'no') {
-                return "The proposed solution does NOT meet the goal. The approach is either using the wrong service/feature, missing a required step, operating at the wrong scope, or only partially addresses what's needed.";
-            }
-            if (!isCorrect && optLower === 'yes') {
-                return "Incorrect — the proposed solution fails to meet one or more requirements. Common reasons: wrong tool for the job, insufficient permissions, wrong scope, or the feature described doesn't work the way the question implies.";
-            }
-            if (!isCorrect && optLower === 'no') {
-                return "Incorrect — the proposed solution actually DOES work. The approach described in the scenario correctly satisfies all the stated conditions and goals.";
-            }
+            return this.explainYesNo(q, isCorrect, optLower);
         }
 
         // === TAG questions ===
@@ -662,6 +655,359 @@ const app = {
         return null; // No specific explanation found
     },
 
+    explainYesNo(q, isCorrect, optLower) {
+        const text = q.question;
+        
+        // Extract the goal/requirement from the question
+        let goal = '';
+        let solution = '';
+        
+        // Common patterns: "Solution: ..." appears in the question
+        const solMatch = text.match(/Solution:\s*(.+?)(?:\n\nDoes|\n\n$|$)/si);
+        if (solMatch) solution = solMatch[1].trim();
+        
+        // Extract the goal/requirement - look for patterns like "You want to...", "You need to...", "The policy must..."
+        const goalPatterns = [
+            /(?:you want to|you need to|you must|you plan to|you have been tasked to|the goal is to)\s+(.+?)(?:\.\s*\n|\n\n)/i,
+            /(?:must be configured to|needs to be|should be)\s+(.+?)(?:\.\s*\n|\n\n)/i,
+            /(?:requirement|goal|objective)[s]?[:\s]+(.+?)(?:\.\s*\n|\n\n)/i
+        ];
+        for (const pat of goalPatterns) {
+            const m = text.match(pat);
+            if (m) { goal = m[1].trim(); break; }
+        }
+        
+        // If we couldn't extract cleanly, try to get the requirement section
+        if (!goal) {
+            const lines = text.split('\n').filter(l => l.trim());
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].toLowerCase();
+                if (line.includes('you want') || line.includes('you need') || line.includes('must be') || line.includes('you plan')) {
+                    goal = lines[i].trim();
+                    break;
+                }
+            }
+        }
+
+        // Build the correct approach explanation
+        const correctWay = this.getCorrectApproach(text, goal, solution);
+
+        if (isCorrect && optLower === 'yes') {
+            let explanation = `<b>✅ Yes — this solution works.</b><br><br>`;
+            if (solution) explanation += `<b>Proposed solution:</b> ${solution}<br><br>`;
+            if (goal) explanation += `<b>Goal:</b> ${goal}<br><br>`;
+            explanation += `<b>Why it works:</b> ${correctWay.whyWorks || 'The proposed approach uses the correct Azure service/feature with the right scope and configuration to achieve all stated requirements.'}`;
+            return explanation;
+        }
+        if (isCorrect && optLower === 'no') {
+            let explanation = `<b>❌ No — this solution does NOT work.</b><br><br>`;
+            if (solution) explanation += `<b>Proposed solution:</b> ${solution}<br><br>`;
+            if (goal) explanation += `<b>Goal:</b> ${goal}<br><br>`;
+            explanation += `<b>Why it fails:</b> ${correctWay.whyFails || 'The proposed approach either uses the wrong feature, wrong scope, or is missing required steps.'}<br><br>`;
+            explanation += `<b>✅ Correct approach:</b> ${correctWay.correct || 'Use a different Azure service/feature that directly addresses all the stated requirements.'}`;
+            return explanation;
+        }
+        if (!isCorrect && optLower === 'yes') {
+            let explanation = `<b>This answer is wrong — the solution does NOT work.</b><br><br>`;
+            if (solution) explanation += `<b>Proposed solution:</b> ${solution}<br><br>`;
+            explanation += `<b>Why it fails:</b> ${correctWay.whyFails || 'The proposed approach doesn\'t fully meet the requirements.'}<br><br>`;
+            explanation += `<b>✅ Correct approach:</b> ${correctWay.correct || 'A different service or configuration is needed.'}`;
+            return explanation;
+        }
+        if (!isCorrect && optLower === 'no') {
+            let explanation = `<b>This answer is wrong — the solution actually DOES work.</b><br><br>`;
+            if (solution) explanation += `<b>Proposed solution:</b> ${solution}<br><br>`;
+            explanation += `<b>Why it works:</b> ${correctWay.whyWorks || 'The proposed approach correctly satisfies all requirements.'}`;
+            return explanation;
+        }
+        return null;
+    },
+
+    getCorrectApproach(text, goal, solution) {
+        const t = text.toLowerCase();
+        const s = solution.toLowerCase();
+        const result = { whyWorks: '', whyFails: '', correct: '' };
+
+        // === CONDITIONAL ACCESS ===
+        if (t.includes('conditional access') && (t.includes('mfa') || t.includes('multi-factor'))) {
+            if (s.includes('multi-factor authentication page') || s.includes('user settings')) {
+                result.whyFails = "The MFA user settings page (Security > MFA) only enables/disables MFA per user. It CANNOT enforce device requirements (Azure AD-joined) or location-based conditions. These require Conditional Access policies.";
+                result.correct = "Create a <b>Conditional Access policy</b> with: Assignments → Users (Global Administrators), Conditions → Locations (untrusted), Grant controls → Require MFA + Require Azure AD-joined device.";
+            } else if (s.includes('session control')) {
+                result.whyFails = "Session controls in Conditional Access manage POST-sign-in behavior (sign-in frequency, app restrictions). They do NOT enforce authentication requirements like MFA or device compliance at the time of sign-in.";
+                result.correct = "Use <b>Grant controls</b> (not session controls) in a Conditional Access policy. Grant controls enforce: Require MFA, Require compliant device, Require Azure AD-joined device, etc.";
+            } else if (s.includes('grant control') || s.includes('conditional access policy')) {
+                result.whyWorks = "A Conditional Access policy with Grant controls can combine multiple requirements: (1) Target users = Global Administrators, (2) Condition = untrusted locations, (3) Grant = Require MFA AND Require Azure AD-joined device. This satisfies all stated conditions.";
+            } else if (s.includes('security default')) {
+                result.whyFails = "Security Defaults enable basic MFA for all users but don't allow granular control over device requirements, specific user groups, or location conditions.";
+                result.correct = "Disable Security Defaults and create a <b>Conditional Access policy</b> with specific user/group targeting, location conditions, and device compliance requirements in Grant controls.";
+            }
+        }
+
+        // === AZURE AD CONNECT / SYNC ===
+        if (t.includes('azure ad') && (t.includes('sync') || t.includes('replicate') || t.includes('ad connect'))) {
+            if (s.includes('start-adsyncsync') && s.includes('delta')) {
+                result.whyWorks = "Start-ADSyncSyncCycle -PolicyType Delta immediately processes ONLY objects changed since last sync. It's the fastest way to push a new/modified user to Azure AD without waiting for the 30-minute auto-cycle.";
+            } else if (s.includes('start-adsyncsync') && s.includes('initial')) {
+                result.whyFails = "An Initial sync reprocesses ALL objects (can take hours for large directories). While it would eventually sync the user, a Delta sync achieves the same result in seconds for a single change.";
+                result.correct = "Run <b>Start-ADSyncSyncCycle -PolicyType Delta</b> on the Azure AD Connect server. This only syncs changes since the last cycle and completes in seconds.";
+            } else if (s.includes('sites and services') || s.includes('active directory sites')) {
+                result.whyFails = "Active Directory Sites and Services manages replication BETWEEN on-premises domain controllers. It has zero effect on Azure AD Connect synchronization to the cloud.";
+                result.correct = "Run <b>Start-ADSyncSyncCycle -PolicyType Delta</b> on the Azure AD Connect server to trigger an immediate cloud sync.";
+            } else if (s.includes('netlogon')) {
+                result.whyFails = "The NetLogon service handles domain controller authentication and secure channel operations. Restarting it does not trigger any Azure AD synchronization.";
+                result.correct = "Run <b>Start-ADSyncSyncCycle -PolicyType Delta</b> on the Azure AD Connect server.";
+            }
+        }
+
+        // === RESOURCE GROUPS / MOVING RESOURCES ===
+        if (t.includes('move') && (t.includes('resource group') || t.includes('subscription'))) {
+            if (s.includes('same region') || result.correct === '') {
+                if (t.includes('different region')) {
+                    result.whyFails = "Moving a resource between resource groups or subscriptions does NOT change its physical region/location. The resource stays in its original region.";
+                    result.correct = "To move a resource to a different REGION, you must <b>redeploy</b> it in the target region (or use Azure Resource Mover for supported resource types).";
+                }
+            }
+        }
+
+        // === POLICY ASSIGNMENT ===
+        if (t.includes('policy') || t.includes('initiative')) {
+            if (s.includes('management group') && t.includes('subscription')) {
+                result.whyWorks = "Assigning a policy at the Management Group level applies it to ALL subscriptions under that management group. Policy assignments inherit downward through the hierarchy.";
+            }
+            if (s.includes('resource group') && t.includes('subscription')) {
+                result.whyFails = "Assigning policy at a resource group scope only affects that single resource group, not the entire subscription or other resource groups.";
+                result.correct = "Assign the policy at the <b>subscription scope</b> to cover all resource groups, or at the <b>management group scope</b> to cover multiple subscriptions.";
+            }
+        }
+
+        // === BACKUP ===
+        if (t.includes('backup') || t.includes('recovery services')) {
+            if (s.includes('different region') && t.includes('vault')) {
+                result.whyFails = "A Recovery Services vault must be in the SAME region as the resource being backed up. You cannot back up a resource to a vault in a different region directly.";
+                result.correct = "Create a <b>Recovery Services vault in the same region</b> as the resource, then configure the backup policy.";
+            }
+            if (s.includes('same region')) {
+                result.whyWorks = "The Recovery Services vault is in the same region as the protected resource, which is required. Backup data is stored locally and can be geo-replicated based on vault redundancy settings (LRS/GRS).";
+            }
+        }
+
+        // === RBAC / PERMISSIONS ===
+        if (t.includes('permission') || t.includes('role') || t.includes('access')) {
+            if (s.includes('contributor') && t.includes('assign role')) {
+                result.whyFails = "The Contributor role can manage all resources but CANNOT assign RBAC roles to other users. Role assignment requires the Owner role or User Access Administrator role.";
+                result.correct = "Assign the <b>Owner</b> role (full access + RBAC) or <b>User Access Administrator</b> role (RBAC management only) at the appropriate scope.";
+            }
+            if (s.includes('reader') && (t.includes('create') || t.includes('modify') || t.includes('deploy'))) {
+                result.whyFails = "The Reader role is strictly read-only. It cannot create, modify, delete, or manage any Azure resources.";
+                result.correct = "Assign <b>Contributor</b> (for resource management) or a more specific role like <b>Virtual Machine Contributor</b> for targeted access.";
+            }
+        }
+
+        // === NETWORKING ===
+        if (t.includes('virtual network') || t.includes('vnet')) {
+            if (s.includes('peering') && t.includes('transitive')) {
+                result.whyFails = "VNet peering is NON-transitive. If VNet-A peers with VNet-B and VNet-B peers with VNet-C, VNet-A CANNOT communicate with VNet-C through VNet-B.";
+                result.correct = "Either create a <b>direct peering between VNet-A and VNet-C</b>, or use a <b>hub-and-spoke topology with Azure Firewall/NVA</b> in the hub for transit routing.";
+            }
+            if (t.includes('different region') && s.includes('peering')) {
+                result.whyWorks = "Global VNet Peering allows peering between VNets in different Azure regions. Traffic uses Microsoft's backbone network with low latency.";
+            }
+        }
+
+        // === DNS ===
+        if (t.includes('dns') && !t.includes('ad connect')) {
+            if (s.includes('cname') && t.includes('apex') || t.includes('zone apex') || t.includes('root domain')) {
+                result.whyFails = "CNAME records CANNOT be created at the zone apex (@ record). This is a DNS protocol limitation, not Azure-specific. The apex must have SOA and NS records.";
+                result.correct = "Use an <b>Azure DNS Alias record set</b> (A or AAAA type) at the zone apex. Alias records can point to Azure resources (Traffic Manager, Public IP, CDN) and auto-update.";
+            }
+        }
+
+        // === STORAGE ===
+        if (t.includes('storage') && (t.includes('access') || t.includes('anonymous') || t.includes('public'))) {
+            if (s.includes('access key')) {
+                result.whyFails = "Access keys provide FULL unrestricted access to the entire storage account. They don't support time-limits, IP restrictions, or granular permissions.";
+                result.correct = "Use a <b>Shared Access Signature (SAS)</b> for time-limited, permission-scoped access, or <b>Azure AD RBAC</b> for identity-based access control.";
+            }
+        }
+
+        // === AZURE MONITOR / ALERTS ===
+        if (t.includes('alert') || t.includes('notify') || t.includes('monitor')) {
+            if (s.includes('action group') && !t.includes('create alert')) {
+                result.whyFails = "An action group defines WHO to notify and HOW (email, SMS, webhook), but you still need an Alert Rule to define WHAT condition triggers the notification.";
+                result.correct = "Create an <b>Alert Rule</b> (metric alert, log alert, or activity log alert) that defines the condition, then associate it with an Action Group for notifications.";
+            }
+            if (s.includes('diagnostic setting') && t.includes('alert')) {
+                result.whyFails = "Diagnostic settings send logs/metrics to destinations (Log Analytics, Storage, Event Hub) but don't create alerts. You need a separate Alert Rule.";
+                result.correct = "After configuring diagnostic settings, create a <b>Log Alert Rule</b> in Azure Monitor that queries the Log Analytics workspace and triggers an Action Group.";
+            }
+        }
+
+        // === VM / COMPUTE ===
+        if (t.includes('virtual machine') || t.includes(' vm ') || t.includes(' vms ')) {
+            if (s.includes('availability set') && t.includes('zone')) {
+                result.whyFails = "Availability Sets provide redundancy within a SINGLE datacenter (fault/update domains). They don't protect against datacenter-level failures. Availability Zones use separate physical datacenters.";
+                result.correct = "Deploy VMs across <b>Availability Zones</b> (zone 1, 2, 3) for datacenter-level redundancy with 99.99% SLA, vs Availability Sets' 99.95% SLA.";
+            }
+            if (s.includes('resize') && t.includes('availability set')) {
+                result.whyFails = "VMs in an availability set share a hardware cluster. If the new size isn't available on that cluster, you'll get an allocation failure.";
+                result.correct = "<b>Stop (deallocate) ALL VMs in the availability set</b>, then resize. This releases the cluster constraint so Azure can allocate on a different cluster supporting the new size.";
+            }
+        }
+
+        // === APP SERVICE ===
+        if (t.includes('app service') || t.includes('web app')) {
+            if (s.includes('basic') && (t.includes('slot') || t.includes('deployment slot'))) {
+                result.whyFails = "Deployment slots require <b>Standard tier or higher</b>. The Basic tier does not support deployment slots.";
+                result.correct = "Scale up to <b>Standard (S1)</b> or <b>Premium</b> tier, then create deployment slots for staging/testing before swapping to production.";
+            }
+            if (s.includes('free') && (t.includes('custom domain') || t.includes('ssl'))) {
+                result.whyFails = "The Free tier does not support custom domains or SSL bindings.";
+                result.correct = "Scale up to at least <b>Basic (B1)</b> for custom domains, or <b>Standard</b> for SSL + deployment slots.";
+            }
+        }
+
+        // === GENERAL: If nothing specific matched, try to extract from keywords ===
+        if (!result.whyWorks && !result.whyFails) {
+            // Try to match solution keywords to known approaches
+            if (s.includes('powershell') || s.includes('az ') || s.includes('cmdlet')) {
+                if (t.includes('correct')) {
+                    result.whyWorks = "The PowerShell command/cmdlet used is the correct one for this operation, with the right parameters and targeting the right resource.";
+                } else {
+                    result.whyFails = "The command either uses the wrong cmdlet, wrong parameters, or targets the wrong resource type for this operation.";
+                }
+            }
+        }
+
+        return result;
+    },
+
+    explainFromQuestionContext(q, optText, optLower, isCorrect) {
+        const question = q.question.toLowerCase();
+        const correctAnswer = q.correctAnswers[0] ? q.correctAnswers[0].replace(/^[A-Z]\.\s*/, '').trim() : '';
+        
+        // For numeric options or very short options — explain using the question context
+        const isNumericOption = /^\d+$/.test(optLower.trim());
+        const isShortOption = optLower.length < 30;
+        
+        if (!isNumericOption && !isShortOption) return null;
+
+        // === MANAGEMENT GROUPS / HIERARCHY depth ===
+        if (question.includes('management group') && question.includes('level') || question.includes('depth') || (question.includes('management group') && question.includes('how many'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. Azure Management Groups support up to 6 levels of depth (not counting the root or subscription level). The hierarchy goes: Root > Level 1 > Level 2 > Level 3 > Level 4 > Level 5 > Level 6 > Subscriptions.`;
+            return `<b>${optText}</b> is incorrect. Azure Management Groups have a maximum of 6 levels of depth below the root level. This value doesn't match the Azure platform limit.`;
+        }
+
+        // === SUBSCRIPTIONS per management group ===
+        if (question.includes('management group') && question.includes('subscription')) {
+            if (isCorrect) return `<b>${optText}</b> is correct. A subscription can only belong to ONE management group at a time, but a management group can contain many subscriptions.`;
+            return `<b>${optText}</b> is incorrect for this management group/subscription relationship.`;
+        }
+
+        // === RESOURCE GROUPS limits ===
+        if (question.includes('resource group') && (question.includes('how many') || question.includes('maximum') || question.includes('limit'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. This is the Azure platform limit for this resource group operation/configuration.`;
+            return `<b>${optText}</b> is incorrect — it doesn't match the documented Azure limit.`;
+        }
+
+        // === TAGS limits ===
+        if (question.includes('tag') && (question.includes('how many') || question.includes('maximum') || question.includes('limit') || question.includes('number'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. Azure resources, resource groups, and subscriptions can each have a maximum of 50 tag name-value pairs. Tag name max is 512 chars (128 for storage), tag value max is 256 chars.`;
+            return `<b>${optText}</b> is incorrect. The Azure tag limit is 50 tags per resource/resource group/subscription.`;
+        }
+
+        // === AVAILABILITY SET: Fault Domains ===
+        if (question.includes('fault domain') || question.includes('platformfaultdomaincount')) {
+            if (isCorrect) return `<b>${optText}</b> is correct. Fault Domains (FDs) represent separate physical racks in a datacenter with independent power and networking. Azure regions support a maximum of 2 or 3 fault domains per availability set (region-dependent). This ensures VMs are distributed across racks to survive hardware failures.`;
+            return `<b>${optText}</b> is incorrect. Azure Availability Sets support a maximum of 3 fault domains (2 in some regions). Each FD is a separate physical rack — setting this value wrong means less hardware failure protection.`;
+        }
+
+        // === AVAILABILITY SET: Update Domains ===
+        if (question.includes('update domain') || question.includes('platformupdatedomaincount')) {
+            if (isCorrect) return `<b>${optText}</b> is correct. Update Domains (UDs) determine how VMs are grouped for planned maintenance. Azure reboots only one UD at a time during updates. Maximum is 20 UDs per availability set (default is 5). More UDs = fewer VMs affected per maintenance wave.`;
+            return `<b>${optText}</b> is incorrect. Update Domains range from 1-20 (default 5). The value should provide optimal distribution for the scenario described.`;
+        }
+
+        // === NSG rule limits ===
+        if (question.includes('nsg') && (question.includes('rule') || question.includes('limit') || question.includes('maximum') || question.includes('priority'))) {
+            if (question.includes('priority')) {
+                if (isCorrect) return `<b>${optText}</b> is correct. NSG rule priorities range from 100 to 4096. Lower number = higher priority (evaluated first). The system reserves priorities below 100 and above 4096 for default rules.`;
+                return `<b>${optText}</b> is incorrect for NSG rule priority. Valid range is 100-4096 (lower = evaluated first).`;
+            }
+            if (isCorrect) return `<b>${optText}</b> is correct. This matches the Azure platform limit for NSG rules.`;
+            return `<b>${optText}</b> is incorrect — doesn't match the documented NSG limit.`;
+        }
+
+        // === VNET limits: subnets, peering ===
+        if (question.includes('subnet') && (question.includes('how many') || question.includes('maximum') || question.includes('limit'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. Azure VNets support this number of subnets per virtual network as a platform limit.`;
+            return `<b>${optText}</b> doesn't match the Azure subnet limit.`;
+        }
+        if (question.includes('peering') && (question.includes('how many') || question.includes('maximum') || question.includes('limit'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. Azure limits the number of VNet peerings per virtual network (default 500, can be increased).`;
+            return `<b>${optText}</b> doesn't match the VNet peering limit.`;
+        }
+
+        // === IP address limits ===
+        if (question.includes('ip address') && (question.includes('how many') || question.includes('maximum') || question.includes('limit'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. This matches the Azure limit for IP addresses in this configuration.`;
+            return `<b>${optText}</b> is incorrect for the IP address limit in this scenario.`;
+        }
+
+        // === LOAD BALANCER rules/pools ===
+        if (question.includes('load balancer') && (question.includes('how many') || question.includes('maximum') || question.includes('rule') || question.includes('pool'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. Standard Load Balancer supports up to 1000 backend pool instances, 500 LB rules, and multiple frontend IPs.`;
+            return `<b>${optText}</b> doesn't match the Load Balancer platform limit for this configuration.`;
+        }
+
+        // === STORAGE: number of storage accounts per subscription ===
+        if (question.includes('storage account') && (question.includes('how many') || question.includes('maximum') || question.includes('limit') || question.includes('per'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. Azure allows up to 250 storage accounts per subscription per region (can be increased via support request).`;
+            return `<b>${optText}</b> is incorrect. The default limit is 250 storage accounts per subscription per region.`;
+        }
+
+        // === BACKUP: retention, snapshots ===
+        if (question.includes('backup') && (question.includes('retention') || question.includes('how many') || question.includes('maximum') || question.includes('day') || question.includes('point'))) {
+            if (isCorrect) return `<b>${optText}</b> is correct. This matches the Azure Backup retention/recovery point limit for the described configuration.`;
+            return `<b>${optText}</b> doesn't match the backup retention or recovery point limit.`;
+        }
+
+        // === GENERAL: "how many" / "maximum" / "minimum" questions with numeric answers ===
+        if (isNumericOption && (question.includes('how many') || question.includes('maximum') || question.includes('minimum') || question.includes('at least') || question.includes('number of'))) {
+            if (isCorrect) return `<b>${optText}</b> is the correct value. This is the documented Azure platform limit or required minimum for the scenario described in the question. Azure enforces these limits at the resource provider level.`;
+            return `<b>${optText}</b> is incorrect. This doesn't match the Azure-documented value for this configuration. Azure has specific platform limits and minimums that must be memorized for the AZ-104 exam.`;
+        }
+
+        // === GENERAL: numeric with context about what the question asks ===
+        if (isNumericOption) {
+            // Extract what the question is actually asking about
+            let topic = '';
+            if (question.includes('virtual machine') || question.includes('vm')) topic = 'VMs/compute';
+            else if (question.includes('storage')) topic = 'storage';
+            else if (question.includes('network') || question.includes('vnet') || question.includes('subnet')) topic = 'networking';
+            else if (question.includes('resource group')) topic = 'resource groups';
+            else if (question.includes('subscription')) topic = 'subscriptions';
+            else if (question.includes('policy')) topic = 'Azure Policy';
+            else if (question.includes('user') || question.includes('group') || question.includes('role')) topic = 'identity/access';
+            
+            if (topic) {
+                if (isCorrect) return `<b>${optText}</b> is correct for this ${topic} scenario. This value represents the correct Azure limit, count, or configuration parameter as documented by Microsoft.`;
+                return `<b>${optText}</b> is incorrect for this ${topic} scenario. This value either exceeds the Azure limit, is below the required minimum, or simply doesn't match the documented behavior.`;
+            }
+        }
+
+        // === Short text options that aren't numbers ===
+        if (isShortOption && !isNumericOption) {
+            // Try to explain based on what's in the question
+            if (question.includes('which') || question.includes('what')) {
+                if (isCorrect) return `<b>${optText}</b> is correct — this is the right value/setting for the scenario described. It matches the specific Azure configuration or parameter that satisfies the requirement.`;
+                return `<b>${optText}</b> is incorrect for this scenario. While it may be a valid Azure value in other contexts, it doesn't match what's needed for the specific requirement described in the question.`;
+            }
+        }
+
+        return null;
+    },
+
     getTechExplanation(optLower, isCorrect, question) {
         // Analyze keywords in the option to provide technical context
         const concepts = [];
@@ -709,19 +1055,32 @@ const app = {
     explainCorrectAnswer(q) {
         const question = q.question.toLowerCase();
         const answer = q.correctAnswers.join(' ').toLowerCase();
+        const correctText = q.correctAnswers[0] ? q.correctAnswers[0].replace(/^[A-Z]\.\s*/, '').trim() : '';
         
         if (answer.includes('yes')) return "The proposed solution correctly satisfies ALL requirements: it uses the right service, at the right scope, with the right configuration to achieve the stated goal.";
         if (answer.includes('no')) return "The proposed solution FAILS to meet the goal because it either: uses the wrong service/feature, operates at the wrong scope (subscription vs resource group vs resource), is missing required steps, or the described feature doesn't work the way the question implies.";
         
+        // Try to give context about WHY this specific answer is correct
         const topicInfo = TOPICS[q.topic];
-        if (topicInfo) {
-            return `This is correct because it uses the appropriate Azure service/feature for the ${topicInfo.name} domain, directly addressing all requirements with the proper scope and configuration.`;
-        }
-        return "This is the correct answer — it directly addresses all stated requirements using the proper Azure service and configuration.";
+        const domain = topicInfo ? topicInfo.name : 'Azure Administration';
+        
+        if (question.includes('minimum') || question.includes('at least'))
+            return `<b>${correctText}</b> is the minimum required value. Azure requires at least this number/configuration for the scenario to function correctly in the ${domain} domain.`;
+        if (question.includes('maximum') || question.includes('limit'))
+            return `<b>${correctText}</b> is the platform limit. Azure enforces this as the maximum for this configuration in the ${domain} area.`;
+        if (question.includes('how many'))
+            return `<b>${correctText}</b> is the correct count. Based on Azure's documented limits and behavior for ${domain}, this is the accurate number.`;
+        if (question.includes('which command') || question.includes('which cmdlet') || question.includes('powershell'))
+            return `<b>${correctText}</b> is the correct command/cmdlet. It performs the exact operation needed with the right parameters for this requirement.`;
+        if (question.includes('which tool') || question.includes('which service'))
+            return `<b>${correctText}</b> is the right tool/service. It's specifically designed for this use case in the ${domain} domain.`;
+            
+        return `<b>${correctText}</b> is correct — it directly satisfies the requirement by using the appropriate Azure capability for the ${domain} domain.`;
     },
 
     explainWhyWrong(q, optText, question) {
         const opt = optText.toLowerCase();
+        const correctText = q.correctAnswers[0] ? q.correctAnswers[0].replace(/^[A-Z]\.\s*/, '').trim() : '';
         
         if (opt === 'yes' && q.correctAnswers.some(a => a.toLowerCase().includes('no'))) {
             return "Incorrect — this solution FAILS to meet the goal. It either uses the wrong service, wrong scope, missing steps, or the feature doesn't provide the specific capability required.";
@@ -730,15 +1089,23 @@ const app = {
             return "Incorrect — this solution actually DOES work. The described approach correctly uses the right Azure service/feature to achieve all stated requirements.";
         }
         
-        // Analyze why it might be wrong based on common patterns
-        if (opt.includes('powershell') || opt.includes('cli') || opt.includes('az ')) {
-            return "This command/tool exists but either targets the wrong resource type, uses incorrect parameters, or performs the wrong operation for what's being asked.";
+        // Provide specific "why not this one" based on comparison to correct answer
+        if (question.includes('minimum') || question.includes('at least')) {
+            return `<b>${optText}</b> is incorrect. The correct minimum is <b>${correctText}</b>. This value is either too high (unnecessary over-provisioning) or too low (doesn't meet the requirement).`;
         }
-        if (opt.includes('portal') || opt.includes('blade') || opt.includes('navigate')) {
-            return "This Azure Portal path exists but either leads to the wrong setting, wrong scope, or doesn't provide the specific capability needed for this requirement.";
+        if (question.includes('maximum') || question.includes('limit') || question.includes('how many')) {
+            return `<b>${optText}</b> is incorrect. The correct answer is <b>${correctText}</b>. This value doesn't match Azure's documented limit or required configuration.`;
         }
         
-        return "This option uses a valid Azure service/feature but it doesn't satisfy the specific requirement. It either operates at the wrong scope, targets the wrong resource type, provides different functionality, or requires additional steps not mentioned.";
+        // Analyze why it might be wrong based on common patterns
+        if (opt.includes('powershell') || opt.includes('cli') || opt.includes('az ')) {
+            return `<b>${optText}</b> — this command/tool exists but either targets the wrong resource type, uses incorrect parameters, or performs the wrong operation. The correct approach is <b>${correctText}</b>.`;
+        }
+        if (opt.includes('portal') || opt.includes('blade') || opt.includes('navigate')) {
+            return `<b>${optText}</b> — this Azure Portal path exists but either leads to the wrong setting or doesn't provide the capability needed. The correct approach is <b>${correctText}</b>.`;
+        }
+        
+        return `<b>${optText}</b> — while this is a valid Azure option, it doesn't satisfy the specific requirement here. The correct answer is <b>${correctText}</b> which directly addresses the scenario.`;
     },
 
     prevQuestion() {
@@ -768,16 +1135,30 @@ const app = {
             setTimeout(() => input.style.borderColor = '', 1000);
             return;
         }
-        // Reset filters to "all" so the question is findable
-        document.getElementById('topic-filter').value = 'all';
+        // Apply current topic filter but reset status filter
+        const topic = document.getElementById('topic-filter').value;
         document.getElementById('status-filter').value = 'all';
-        this.filteredQuestions = [...this.questions];
-        // Find by question id
+        
+        if (topic === 'all') {
+            this.filteredQuestions = [...this.questions];
+        } else {
+            this.filteredQuestions = this.questions.filter(q => q.topic === topic);
+        }
+        
+        // Find by question id within filtered set
         const idx = this.filteredQuestions.findIndex(q => q.id === num);
         if (idx !== -1) {
             this.currentQuestionIndex = idx;
             this.renderQuestion();
             input.value = '';
+        } else {
+            // Question exists but not in this topic
+            input.style.borderColor = 'var(--warning)';
+            input.placeholder = 'Not in this topic';
+            setTimeout(() => {
+                input.style.borderColor = '';
+                input.placeholder = 'Go to Q#';
+            }, 1500);
         }
     },
 
