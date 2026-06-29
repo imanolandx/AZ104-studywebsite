@@ -171,8 +171,31 @@ const app = {
     },
 
     renderQuestion() {
+        const container = document.getElementById('question-card');
+        
+        // Always ensure card structure exists
+        if (!document.getElementById('question-topic-badge')) {
+            container.innerHTML = `
+                <div class="question-topic-badge" id="question-topic-badge"></div>
+                <div class="question-text" id="question-text"></div>
+                <div class="options-list" id="options-list"></div>
+                <div class="answer-section hidden" id="answer-section">
+                    <div class="answer-reveal" id="answer-reveal"></div>
+                </div>
+                <div class="question-actions">
+                    <button class="btn btn-primary" id="btn-check" onclick="app.checkAnswer()">Check Answer</button>
+                    <button class="btn btn-secondary hidden" id="btn-reveal" onclick="app.revealAnswer()">Reveal Answer</button>
+                </div>
+            `;
+        }
+
         if (this.filteredQuestions.length === 0) {
-            document.getElementById('question-card').innerHTML = '<p style="text-align:center;color:var(--text-secondary);">No questions match your filters.</p>';
+            document.getElementById('question-topic-badge').textContent = '';
+            document.getElementById('question-text').textContent = 'No questions match your filters.';
+            document.getElementById('options-list').innerHTML = '';
+            document.getElementById('answer-section').classList.add('hidden');
+            document.getElementById('btn-check').classList.add('hidden');
+            document.getElementById('btn-reveal').classList.add('hidden');
             document.getElementById('question-counter').textContent = '0 / 0';
             return;
         }
@@ -244,9 +267,7 @@ const app = {
             <div class="answer-correct">
                 <strong>Correct Answer:</strong> ${q.correctAnswers.join(', ')}
             </div>
-            <div class="answer-explanation">
-                <strong>📖 Explanation:</strong><br>${explanation}
-            </div>
+            ${explanation}
         `;
 
         document.getElementById('btn-check').classList.add('hidden');
@@ -272,9 +293,7 @@ const app = {
             <div class="answer-correct">
                 <strong>Correct Answer:</strong> ${q.correctAnswers.join(', ')}
             </div>
-            <div class="answer-explanation">
-                <strong>📖 Explanation:</strong><br>${explanation}
-            </div>
+            ${explanation}
         `;
 
         document.getElementById('btn-check').classList.add('hidden');
