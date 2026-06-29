@@ -658,35 +658,28 @@ const app = {
     explainYesNo(q, isCorrect, optLower) {
         const text = q.question;
         
-        // Extract the goal/requirement from the question
-        let goal = '';
+        // Extract the solution - try multiple patterns
         let solution = '';
+        const solPatterns = [
+            /Solution:\s*(.+?)(?=\n.*(?:Does this meet|Does the solution))/si,
+            /Solution:\s*(.+?)(?=Does this meet|Does the solution)/si,
+            /Solution:\s*(.+?)$/mi
+        ];
+        for (const pat of solPatterns) {
+            const m = text.match(pat);
+            if (m) { solution = m[1].trim().replace(/\n+/g, ' '); break; }
+        }
         
-        // Common patterns: "Solution: ..." appears in the question
-        const solMatch = text.match(/Solution:\s*(.+?)(?:\n\nDoes|\n\n$|$)/si);
-        if (solMatch) solution = solMatch[1].trim();
-        
-        // Extract the goal/requirement - look for patterns like "You want to...", "You need to...", "The policy must..."
+        // Extract the goal/requirement
+        let goal = '';
         const goalPatterns = [
-            /(?:you want to|you need to|you must|you plan to|you have been tasked to|the goal is to)\s+(.+?)(?:\.\s*\n|\n\n)/i,
-            /(?:must be configured to|needs to be|should be)\s+(.+?)(?:\.\s*\n|\n\n)/i,
-            /(?:requirement|goal|objective)[s]?[:\s]+(.+?)(?:\.\s*\n|\n\n)/i
+            /(?:you need to|you want to|you must|you plan to|you have been tasked to|the goal is to|you intend to)\s+(.+?)(?:\.|$)/mi,
+            /(?:must be configured to|needs to be configured to|should be configured to)\s+(.+?)(?:\.|$)/mi,
+            /(?:the policy must be|the solution must)\s+(.+?)(?:\.|$)/mi
         ];
         for (const pat of goalPatterns) {
             const m = text.match(pat);
             if (m) { goal = m[1].trim(); break; }
-        }
-        
-        // If we couldn't extract cleanly, try to get the requirement section
-        if (!goal) {
-            const lines = text.split('\n').filter(l => l.trim());
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i].toLowerCase();
-                if (line.includes('you want') || line.includes('you need') || line.includes('must be') || line.includes('you plan')) {
-                    goal = lines[i].trim();
-                    break;
-                }
-            }
         }
 
         // Build the correct approach explanation
@@ -728,6 +721,21 @@ const app = {
         const s = solution.toLowerCase();
         const result = { whyWorks: '', whyFails: '', correct: '' };
 
+        // === GUEST USERS / B2B ===
+        if (t.includes('guest') || t.includes('external user') || t.includes('b2b') || (t.includes('invite') && t.includes('user'))) {
+            if (s.includes('new-azureaduser') && !s.includes('invitation')) {
+                result.whyFails = "<b>New-AzureADUser</b> creates INTERNAL (member) users in your directory. It cannot create guest/external users. Guest users are created through the B2B invitation process, not regular user creation.";
+                result.correct = "Use <b>New-AzureADMSInvitation</b> cmdlet to send B2B invitations to external users. This sends an invitation email and creates a guest user object. For bulk operations: Import the CSV and loop with New-AzureADMSInvitation -InvitedUserEmailAddress $email -InviteRedirectUrl 'https://myapps.microsoft.com'";
+            } else if (s.includes('new-azureadmsinvitation') || s.includes('invitation')) {
+                result.whyWorks = "<b>New-AzureADMSInvitation</b> is the correct cmdlet for creating guest (B2B) users. It sends invitations to external email addresses and creates guest user objects in your Azure AD tenant. You can loop through a CSV to bulk-invite 500 users.";
+            } else if (s.includes('new-msoluser')) {
+                result.whyFails = "<b>New-MsolUser</b> creates internal users using the deprecated MSOnline module. It cannot create guest users. Additionally, the MSOnline module is deprecated in favor of Microsoft Graph.";
+                result.correct = "Use <b>New-AzureADMSInvitation</b> (AzureAD module) or <b>New-MgInvitation</b> (Microsoft Graph module) to invite external users as guests.";
+            } else if (s.includes('bulk') && s.includes('portal')) {
+                result.whyWorks = "The Azure Portal supports bulk invite of guest users: Azure AD > Users > Bulk operations > Bulk invite. You can upload a CSV file with email addresses to invite multiple external users at once.";
+            }
+        }
+
         // === CONDITIONAL ACCESS ===
         if (t.includes('conditional access') && (t.includes('mfa') || t.includes('multi-factor'))) {
             if (s.includes('multi-factor authentication page') || s.includes('user settings')) {
@@ -760,12 +768,40 @@ const app = {
             }
         }
 
+        // === USER CREATION (not guest) ===
+        if ((t.includes('create') || t.includes('add')) && t.includes('user') && !t.includes('guest') && !t.includes('external')) {
+            if (s.includes('new-azureadmsinvitation') || s.includes('invitation')) {
+                result.whyFails = "New-AzureADMSInvitation creates GUEST (external/B2B) users via invitation. It cannot create regular internal member users in your directory.";
+                result.correct = "Use <b>New-AzureADUser</b> to create internal member users. Parameters: -DisplayName, -UserPrincipalName, -PasswordProfile, -AccountEnabled $true, -MailNickName.";
+            } else if (s.includes('new-azureaduser')) {
+                result.whyWorks = "New-AzureADUser correctly creates internal member users in your Azure AD tenant. Combined with Import-Csv for bulk operations, it efficiently creates multiple users from a CSV file.";
+            }
+        }
+
         // === RESOURCE GROUPS / MOVING RESOURCES ===
         if (t.includes('move') && (t.includes('resource group') || t.includes('subscription'))) {
-            if (s.includes('same region') || result.correct === '') {
-                if (t.includes('different region')) {
-                    result.whyFails = "Moving a resource between resource groups or subscriptions does NOT change its physical region/location. The resource stays in its original region.";
-                    result.correct = "To move a resource to a different REGION, you must <b>redeploy</b> it in the target region (or use Azure Resource Mover for supported resource types).";
+            if (t.includes('different region') || t.includes('another region')) {
+                result.whyFails = "Moving a resource between resource groups or subscriptions does NOT change its physical region/location. The resource stays in its original region. Move only changes logical container.";
+                result.correct = "To move a resource to a different REGION, you must <b>redeploy</b> it in the target region (create new → migrate data → delete old), or use <b>Azure Resource Mover</b> for supported resource types (VMs, VNets, NSGs).";
+            }
+        }
+
+        // === RESOURCE LOCKS ===
+        if (t.includes('lock') || t.includes('prevent') && t.includes('delet')) {
+            if (s.includes('readonly') || s.includes('read-only') || s.includes('readlock')) {
+                if (t.includes('delete') && !t.includes('modify')) {
+                    result.whyFails = "A ReadOnly lock prevents both modifications AND deletions. While it does prevent deletion, it's overly restrictive — users also cannot modify the resource. If only deletion prevention is needed, use a Delete lock.";
+                    result.correct = "Apply a <b>Delete lock (CanNotDelete)</b> on the resource. This prevents deletion while still allowing modifications to the resource properties.";
+                } else {
+                    result.whyWorks = "A ReadOnly lock prevents ALL write operations (modify and delete). Users can only read the resource. This protects against both accidental changes and deletions.";
+                }
+            }
+            if (s.includes('delete lock') || s.includes('cannotdelete')) {
+                if (t.includes('modify') || t.includes('change')) {
+                    result.whyFails = "A Delete lock (CanNotDelete) only prevents deletion. It does NOT prevent modifications to the resource. Users can still change properties, settings, and configurations.";
+                    result.correct = "Apply a <b>ReadOnly lock</b> to prevent both modifications and deletions. Only read operations are allowed with this lock type.";
+                } else {
+                    result.whyWorks = "A Delete lock prevents accidental deletion while still allowing users to modify the resource. This is the least-restrictive lock that prevents deletion.";
                 }
             }
         }
@@ -775,9 +811,9 @@ const app = {
             if (s.includes('management group') && t.includes('subscription')) {
                 result.whyWorks = "Assigning a policy at the Management Group level applies it to ALL subscriptions under that management group. Policy assignments inherit downward through the hierarchy.";
             }
-            if (s.includes('resource group') && t.includes('subscription')) {
+            if (s.includes('resource group') && (t.includes('subscription') || t.includes('all resource'))) {
                 result.whyFails = "Assigning policy at a resource group scope only affects that single resource group, not the entire subscription or other resource groups.";
-                result.correct = "Assign the policy at the <b>subscription scope</b> to cover all resource groups, or at the <b>management group scope</b> to cover multiple subscriptions.";
+                result.correct = "Assign the policy at the <b>subscription scope</b> to cover all resource groups within that subscription, or at the <b>management group scope</b> to cover multiple subscriptions.";
             }
         }
 
@@ -785,96 +821,132 @@ const app = {
         if (t.includes('backup') || t.includes('recovery services')) {
             if (s.includes('different region') && t.includes('vault')) {
                 result.whyFails = "A Recovery Services vault must be in the SAME region as the resource being backed up. You cannot back up a resource to a vault in a different region directly.";
-                result.correct = "Create a <b>Recovery Services vault in the same region</b> as the resource, then configure the backup policy.";
+                result.correct = "Create a <b>Recovery Services vault in the same region</b> as the resource, then configure the backup policy. For cross-region redundancy, set the vault's storage replication to GRS.";
             }
-            if (s.includes('same region')) {
+            if (s.includes('same region') || (s.includes('vault') && !s.includes('different'))) {
                 result.whyWorks = "The Recovery Services vault is in the same region as the protected resource, which is required. Backup data is stored locally and can be geo-replicated based on vault redundancy settings (LRS/GRS).";
             }
         }
 
         // === RBAC / PERMISSIONS ===
-        if (t.includes('permission') || t.includes('role') || t.includes('access')) {
-            if (s.includes('contributor') && t.includes('assign role')) {
+        if (t.includes('permission') || t.includes('role') || (t.includes('access') && t.includes('assign'))) {
+            if (s.includes('contributor') && (t.includes('assign role') || t.includes('delegate') || t.includes('grant access'))) {
                 result.whyFails = "The Contributor role can manage all resources but CANNOT assign RBAC roles to other users. Role assignment requires the Owner role or User Access Administrator role.";
-                result.correct = "Assign the <b>Owner</b> role (full access + RBAC) or <b>User Access Administrator</b> role (RBAC management only) at the appropriate scope.";
+                result.correct = "Assign the <b>Owner</b> role (full access + RBAC management) or <b>User Access Administrator</b> role (RBAC management only, no resource management) at the appropriate scope.";
             }
-            if (s.includes('reader') && (t.includes('create') || t.includes('modify') || t.includes('deploy'))) {
-                result.whyFails = "The Reader role is strictly read-only. It cannot create, modify, delete, or manage any Azure resources.";
-                result.correct = "Assign <b>Contributor</b> (for resource management) or a more specific role like <b>Virtual Machine Contributor</b> for targeted access.";
+            if (s.includes('reader') && (t.includes('create') || t.includes('modify') || t.includes('deploy') || t.includes('manage'))) {
+                result.whyFails = "The Reader role is strictly read-only. It cannot create, modify, delete, or manage any Azure resources. Only view operations are allowed.";
+                result.correct = "Assign <b>Contributor</b> (for full resource management without RBAC) or a specific role like <b>Virtual Machine Contributor</b>, <b>Network Contributor</b>, <b>Storage Account Contributor</b> for least-privilege.";
             }
         }
 
         // === NETWORKING ===
         if (t.includes('virtual network') || t.includes('vnet')) {
-            if (s.includes('peering') && t.includes('transitive')) {
+            if (s.includes('peering') && (t.includes('transitive') || t.includes('three') || t.includes('hub'))) {
                 result.whyFails = "VNet peering is NON-transitive. If VNet-A peers with VNet-B and VNet-B peers with VNet-C, VNet-A CANNOT communicate with VNet-C through VNet-B.";
-                result.correct = "Either create a <b>direct peering between VNet-A and VNet-C</b>, or use a <b>hub-and-spoke topology with Azure Firewall/NVA</b> in the hub for transit routing.";
+                result.correct = "Either create a <b>direct peering between all VNets that need to communicate</b>, or use a <b>hub-and-spoke topology with Azure Firewall/NVA</b> in the hub for transit routing (enable 'Allow Gateway Transit' and 'Use Remote Gateways').";
             }
             if (t.includes('different region') && s.includes('peering')) {
-                result.whyWorks = "Global VNet Peering allows peering between VNets in different Azure regions. Traffic uses Microsoft's backbone network with low latency.";
+                result.whyWorks = "Global VNet Peering allows peering between VNets in different Azure regions. Traffic uses Microsoft's backbone network with low latency. No encryption overhead (unlike VPN).";
             }
         }
 
         // === DNS ===
         if (t.includes('dns') && !t.includes('ad connect')) {
-            if (s.includes('cname') && t.includes('apex') || t.includes('zone apex') || t.includes('root domain')) {
-                result.whyFails = "CNAME records CANNOT be created at the zone apex (@ record). This is a DNS protocol limitation, not Azure-specific. The apex must have SOA and NS records.";
-                result.correct = "Use an <b>Azure DNS Alias record set</b> (A or AAAA type) at the zone apex. Alias records can point to Azure resources (Traffic Manager, Public IP, CDN) and auto-update.";
+            if ((s.includes('cname') && (t.includes('apex') || t.includes('root domain') || t.includes('@')))) {
+                result.whyFails = "CNAME records CANNOT be created at the zone apex (@ record). This is a DNS protocol limitation — the apex must have SOA and NS records which conflict with CNAME.";
+                result.correct = "Use an <b>Azure DNS Alias record set</b> (A or AAAA type) at the zone apex. Alias records can point to Azure resources (Traffic Manager profile, Public IP, CDN endpoint) and auto-update when the resource IP changes.";
             }
         }
 
         // === STORAGE ===
-        if (t.includes('storage') && (t.includes('access') || t.includes('anonymous') || t.includes('public'))) {
-            if (s.includes('access key')) {
-                result.whyFails = "Access keys provide FULL unrestricted access to the entire storage account. They don't support time-limits, IP restrictions, or granular permissions.";
-                result.correct = "Use a <b>Shared Access Signature (SAS)</b> for time-limited, permission-scoped access, or <b>Azure AD RBAC</b> for identity-based access control.";
+        if (t.includes('storage')) {
+            if (s.includes('access key') && (t.includes('limit') || t.includes('time') || t.includes('granular') || t.includes('specific'))) {
+                result.whyFails = "Access keys provide FULL unrestricted access to the entire storage account. They don't support time-limits, IP restrictions, or granular (per-container/blob) permissions.";
+                result.correct = "Use a <b>Shared Access Signature (SAS)</b> for time-limited, permission-scoped, optionally IP-restricted access. Or use <b>Azure AD RBAC</b> (Storage Blob Data Reader/Contributor) for identity-based access.";
+            }
+            if (s.includes('azcopy') && t.includes('between') && t.includes('account')) {
+                result.whyWorks = "AzCopy is the correct tool for server-side copy between storage accounts. Use: <code>azcopy copy 'source-url-with-sas' 'dest-url-with-sas' --recursive</code>. Data transfers directly between accounts without downloading locally.";
             }
         }
 
         // === AZURE MONITOR / ALERTS ===
         if (t.includes('alert') || t.includes('notify') || t.includes('monitor')) {
-            if (s.includes('action group') && !t.includes('create alert')) {
+            if (s.includes('action group') && !t.includes('create alert') && !t.includes('alert rule')) {
                 result.whyFails = "An action group defines WHO to notify and HOW (email, SMS, webhook), but you still need an Alert Rule to define WHAT condition triggers the notification.";
-                result.correct = "Create an <b>Alert Rule</b> (metric alert, log alert, or activity log alert) that defines the condition, then associate it with an Action Group for notifications.";
+                result.correct = "Create an <b>Alert Rule</b> (metric alert, log alert, or activity log alert) that defines the trigger condition, then associate it with an Action Group for notifications/automation.";
             }
             if (s.includes('diagnostic setting') && t.includes('alert')) {
-                result.whyFails = "Diagnostic settings send logs/metrics to destinations (Log Analytics, Storage, Event Hub) but don't create alerts. You need a separate Alert Rule.";
-                result.correct = "After configuring diagnostic settings, create a <b>Log Alert Rule</b> in Azure Monitor that queries the Log Analytics workspace and triggers an Action Group.";
+                result.whyFails = "Diagnostic settings send logs/metrics to destinations (Log Analytics, Storage, Event Hub) for storage/analysis, but don't create alerts by themselves.";
+                result.correct = "Configure diagnostic settings first (to send data to Log Analytics), then create a <b>Log Alert Rule</b> in Azure Monitor that queries the workspace and triggers an Action Group when conditions are met.";
             }
         }
 
         // === VM / COMPUTE ===
         if (t.includes('virtual machine') || t.includes(' vm ') || t.includes(' vms ')) {
             if (s.includes('availability set') && t.includes('zone')) {
-                result.whyFails = "Availability Sets provide redundancy within a SINGLE datacenter (fault/update domains). They don't protect against datacenter-level failures. Availability Zones use separate physical datacenters.";
-                result.correct = "Deploy VMs across <b>Availability Zones</b> (zone 1, 2, 3) for datacenter-level redundancy with 99.99% SLA, vs Availability Sets' 99.95% SLA.";
+                result.whyFails = "Availability Sets provide redundancy within a SINGLE datacenter (fault/update domains). They don't protect against datacenter-level failures.";
+                result.correct = "Deploy VMs across <b>Availability Zones</b> (zone 1, 2, 3) — these are separate physical datacenters within a region. Provides 99.99% SLA vs Availability Sets' 99.95%.";
             }
-            if (s.includes('resize') && t.includes('availability set')) {
+            if ((s.includes('resize') || s.includes('allocation')) && t.includes('availability set')) {
                 result.whyFails = "VMs in an availability set share a hardware cluster. If the new size isn't available on that cluster, you'll get an allocation failure.";
-                result.correct = "<b>Stop (deallocate) ALL VMs in the availability set</b>, then resize. This releases the cluster constraint so Azure can allocate on a different cluster supporting the new size.";
+                result.correct = "<b>Stop (deallocate) ALL VMs in the availability set</b>, then resize. Deallocating releases the cluster constraint, allowing Azure to reallocate to a cluster supporting the new VM size.";
             }
         }
 
         // === APP SERVICE ===
         if (t.includes('app service') || t.includes('web app')) {
             if (s.includes('basic') && (t.includes('slot') || t.includes('deployment slot'))) {
-                result.whyFails = "Deployment slots require <b>Standard tier or higher</b>. The Basic tier does not support deployment slots.";
-                result.correct = "Scale up to <b>Standard (S1)</b> or <b>Premium</b> tier, then create deployment slots for staging/testing before swapping to production.";
+                result.whyFails = "Deployment slots require <b>Standard tier or higher</b>. Basic tier does not support deployment slots. Tier features: Free (10 apps), Basic (unlimited apps, custom domain), Standard (slots, auto-scale), Premium (more slots, VNet integration).";
+                result.correct = "Scale up to <b>Standard (S1)</b> or <b>Premium (P1)</b> tier, then create deployment slots for zero-downtime deployments.";
             }
             if (s.includes('free') && (t.includes('custom domain') || t.includes('ssl'))) {
-                result.whyFails = "The Free tier does not support custom domains or SSL bindings.";
-                result.correct = "Scale up to at least <b>Basic (B1)</b> for custom domains, or <b>Standard</b> for SSL + deployment slots.";
+                result.whyFails = "The Free tier does not support custom domains or SSL bindings. It's limited to the *.azurewebsites.net domain.";
+                result.correct = "Scale to <b>Basic (B1)</b> for custom domains, <b>Standard</b> for SSL + slots + auto-scale.";
             }
         }
 
-        // === GENERAL: If nothing specific matched, try to extract from keywords ===
+        // === SCALE SETS ===
+        if (t.includes('scale set') || t.includes('vmss')) {
+            if (s.includes('availability set')) {
+                result.whyFails = "VM Scale Sets and Availability Sets are SEPARATE availability mechanisms. Scale Sets have built-in fault/update domain distribution and don't use Availability Sets.";
+                result.correct = "Configure the <b>VM Scale Set directly</b> with the desired fault domain count. VMSS handles distribution automatically. For zone protection, deploy VMSS across Availability Zones.";
+            }
+        }
+
+        // === SUBSCRIPTION / MANAGEMENT ===
+        if (t.includes('subscription') && (t.includes('transfer') || t.includes('move') || t.includes('billing'))) {
+            if (s.includes('account admin') || s.includes('service admin')) {
+                result.whyWorks = "The Account Administrator (billing admin) can transfer subscription ownership. The Service Administrator has full control over Azure resources within the subscription.";
+            }
+        }
+
+        // === GENERAL: If nothing specific matched, analyze solution keywords ===
         if (!result.whyWorks && !result.whyFails) {
-            // Try to match solution keywords to known approaches
-            if (s.includes('powershell') || s.includes('az ') || s.includes('cmdlet')) {
-                if (t.includes('correct')) {
-                    result.whyWorks = "The PowerShell command/cmdlet used is the correct one for this operation, with the right parameters and targeting the right resource.";
-                } else {
-                    result.whyFails = "The command either uses the wrong cmdlet, wrong parameters, or targets the wrong resource type for this operation.";
+            // Analyze PowerShell cmdlets
+            if (s.includes('new-azureaduser') && (t.includes('guest') || t.includes('external') || t.includes('invitation'))) {
+                result.whyFails = "New-AzureADUser creates internal MEMBER users only. For guest/external/B2B users, the invitation API must be used.";
+                result.correct = "Use <b>New-AzureADMSInvitation</b> to invite external users as guests, or use the Azure Portal bulk invite feature (Azure AD > Users > Bulk operations > Bulk invite).";
+            }
+            if (s.includes('new-azureadgroup') && t.includes('dynamic')) {
+                result.whyFails = "New-AzureADGroup creates static groups by default. Dynamic groups require setting -GroupTypes 'DynamicMembership' and providing a -MembershipRule.";
+                result.correct = "Use <b>New-AzureADMSGroup</b> with -GroupTypes 'DynamicMembership' -MembershipRule '(user.department -eq \"Sales\")' -MembershipRuleProcessingState 'On'";
+            }
+            // Last resort: generic but informative
+            if (!result.whyWorks && !result.whyFails) {
+                if (s) {
+                    // Analyze what's wrong based on the question context
+                    const keywords = [];
+                    if (t.includes('guest') || t.includes('external')) keywords.push('B2B/guest user operations');
+                    if (t.includes('powershell') || t.includes('script') || t.includes('cmdlet')) keywords.push('PowerShell automation');
+                    if (t.includes('portal')) keywords.push('Azure Portal');
+                    if (t.includes('csv') || t.includes('bulk')) keywords.push('bulk operations');
+                    if (t.includes('permission') || t.includes('role')) keywords.push('access control');
+                    if (t.includes('policy')) keywords.push('Azure Policy');
+                    
+                    const context = keywords.length > 0 ? ` (Context: ${keywords.join(', ')})` : '';
+                    result.whyFails = `The proposed solution uses an approach that doesn't fully address the requirement.${context} The cmdlet/service/configuration described either targets the wrong object type, operates at the wrong scope, or is missing required parameters.`;
+                    result.correct = `Review the requirement carefully — the key distinction is what TYPE of operation is needed (create vs invite, internal vs external, member vs guest, read vs write). The correct tool must match both the OPERATION and the TARGET.`;
                 }
             }
         }
